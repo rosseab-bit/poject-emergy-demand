@@ -250,3 +250,37 @@ def log_class_balance(y: pd.Series) -> dict[str, float]:
         balance["negativos"],
     )
     return balance
+
+
+FEATURE_LABELS = {
+    "temperatura_promedio": "la temperatura media del mes",
+    "grados_dia_frio": "los grados-día de frío",
+    "grados_dia_calor": "los grados-día de calor",
+    "mes_sin": "el componente seno del mes",
+    "mes_cos": "el componente coseno del mes",
+    "anio": "el año",
+    "potencia_maxima": "la potencia máxima",
+    **{
+        lag_column_name(column, 1): f"{label} del mes anterior"
+        for column, label in (
+            ("demanda_total", "la demanda total"),
+            ("demanda_residencial", "la demanda residencial"),
+            ("comercio_e_industria", "la demanda de comercio e industria"),
+            ("grandes_usuarios", "la demanda de grandes usuarios"),
+        )
+    },
+    **{
+        lag_column_name(column, 12): f"{label} del mismo mes del año anterior"
+        for column, label in (
+            ("demanda_total", "la demanda total"),
+            ("demanda_residencial", "la demanda residencial"),
+            ("comercio_e_industria", "la demanda de comercio e industria"),
+            ("grandes_usuarios", "la demanda de grandes usuarios"),
+        )
+    },
+}
+
+
+def feature_label(name: str) -> str:
+    """Descripción legible de una variable; devuelve el mismo texto si no la conoce."""
+    return FEATURE_LABELS.get(name, name)

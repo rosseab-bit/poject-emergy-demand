@@ -4,20 +4,14 @@ import pandas as pd
 
 from src import models
 
-MODEL_LABELS = {
-    models.LOGISTIC_REGRESSION: "Regresión logística",
-    models.RANDOM_FOREST: "Random Forest",
-    models.XGBOOST: "XGBoost",
-}
+MODEL_LABELS = models.MODEL_LABELS
 SCENARIO_LABELS = {
     "A": "A · anticipación (sin potencia máxima)",
     "B": "B · diagnóstico (con potencia máxima)",
 }
 
 
-def model_label(name: str) -> str:
-    """Nombre legible de un modelo; devuelve el mismo texto si no lo conoce."""
-    return MODEL_LABELS.get(name, name)
+model_label = models.model_label
 
 
 MONTH_ABBR = (
