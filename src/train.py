@@ -16,7 +16,7 @@ from sklearn.metrics import (
 )
 from sklearn.model_selection import GridSearchCV, TimeSeriesSplit
 
-from src import config, models
+from src import config, features, models
 from src.logger import log_step
 
 logger = logging.getLogger(__name__)
@@ -191,3 +191,87 @@ def evaluate(
         result.confusion_matrix,
     )
     return result
+
+
+@dataclass
+class ModelRun:
+    """Resultado completo del entrenamiento de un modelo en un escenario.
+
+    Attributes:
+        scenario: ``"A"`` (anticipación) o ``"B"`` (diagnóstico).
+        model: nombre del modelo.
+        features: variables predictoras usadas.
+        n_train: filas de entrenamiento.
+        n_test: filas del hold-out.
+        search: resultado de la búsqueda (validación cruzada y pipeline).
+        test: métricas en el hold-out.
+    """
+
+    scenario: str
+    model: str
+    features: list[str]
+    n_train: int
+    n_test: int
+    search: SearchResult
+    test: EvalResult
+
+
+@log_step
+def train_model(dataset: pd.DataFrame, name: str, scenario: str) -> ModelRun:
+    """Entrena y evalúa un modelo en un escenario.
+
+    Separa el hold-out temporal, busca hiperparámetros solo con el
+    entrenamiento y evalúa una única vez en el hold-out.
+
+    Args:
+        dataset: salida de ``features.build_dataset``.
+        name: uno de ``models.MODEL_NAMES``.
+        scenario: ``"A"`` o ``"B"``.
+
+    Returns:
+        ``ModelRun`` con la búsqueda y la evaluación.
+    """
+    x, y = features.get_model_data(dataset, scenario)
+    x_train, x_test, y_train, y_test = split_holdout(x, y)
+    search = search_hyperparameters(name, x_train, y_train)
+    test = evaluate(search.estimator, x_test, y_test)
+    logger.info(
+        "Resultado %s/%s: F1 validación %.3f ± %.3f, F1 hold-out %.3f",
+        scenario,
+        name,
+        search.cv_mean,
+        search.cv_std,
+        test.f1,
+    )
+    return ModelRun(
+        scenario=scenario,
+        model=name,
+        features=list(x.columns),
+        n_train=len(x_train),
+        n_test=len(x_test),
+        search=search,
+        test=test,
+    )
+
+
+@log_step
+def train_all(
+    dataset: pd.DataFrame,
+    scenarios: tuple[str, ...] = ("A", "B"),
+    model_names: tuple[str, ...] = models.MODEL_NAMES,
+) -> list[ModelRun]:
+    """Entrena todos los modelos en todos los escenarios, con los mismos cortes.
+
+    Args:
+        dataset: salida de ``features.build_dataset``.
+        scenarios: escenarios a entrenar.
+        model_names: modelos a entrenar.
+
+    Returns:
+        Un ``ModelRun`` por combinación escenario y modelo.
+    """
+    return [
+        train_model(dataset, name, scenario)
+        for scenario in scenarios
+        for name in model_names
+    ]

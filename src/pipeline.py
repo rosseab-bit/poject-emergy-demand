@@ -1,9 +1,10 @@
 """Ejecución del pipeline por línea de comandos: ``python -m src.pipeline``."""
 
 import logging
+from collections.abc import Callable
 from pathlib import Path
 
-from src import data, db, features, logger
+from src import data, db, features, logger, train
 
 log = logging.getLogger(__name__)
 
@@ -22,25 +23,25 @@ def run_etl_steps(csv_path: Path | None, db_path: Path | None) -> int:
     return rows
 
 
-def run_etl(csv_path: Path | None = None, db_path: Path | None = None) -> str:
-    """Ejecuta el ETL completo como una corrida registrada.
+@logger.log_step
+def run_training_steps(db_path: Path | None) -> list[train.ModelRun]:
+    """Entrena los 3 modelos en los escenarios A y B desde ``datos_limpios``."""
+    dataset = features.build_dataset(data.load_clean_data(db_path))
+    return train.train_all(dataset)
 
-    Crea el ``run_id``, lo deja activo para el logger, corre los pasos y cierra
-    la corrida con estado ``ok`` o ``error`` (relanzando el error).
 
-    Args:
-        csv_path: CSV de entrada; por defecto el de ``data/raw/``.
-        db_path: ruta de ``structured.db``; por defecto la de ``config``.
+def _run_registered(steps: Callable[[], object], db_path: Path | None) -> str:
+    """Ejecuta ``steps`` como una corrida registrada en ``runs`` y ``logs``.
 
-    Returns:
-        El ``run_id`` de la corrida.
+    Crea el ``run_id``, lo deja activo para el logger y cierra la corrida con
+    estado ``ok`` o ``error`` (relanzando el error).
     """
     logger.setup_logging(db_path)
     db.init_structured_db(db_path)
     run_id = db.create_run(db_path=db_path)
     token = logger.current_run_id.set(run_id)
     try:
-        run_etl_steps(csv_path, db_path)
+        steps()
         db.finish_run(run_id, "ok", db_path)
         log.info("Corrida terminada: run_id=%s", run_id)
     except Exception:
@@ -51,12 +52,43 @@ def run_etl(csv_path: Path | None = None, db_path: Path | None = None) -> str:
     return run_id
 
 
+def run_etl(csv_path: Path | None = None, db_path: Path | None = None) -> str:
+    """Ejecuta solo el ETL como una corrida registrada.
+
+    Args:
+        csv_path: CSV de entrada; por defecto el de ``data/raw/``.
+        db_path: ruta de ``structured.db``; por defecto la de ``config``.
+
+    Returns:
+        El ``run_id`` de la corrida.
+    """
+    return _run_registered(lambda: run_etl_steps(csv_path, db_path), db_path)
+
+
+def run_pipeline(csv_path: Path | None = None, db_path: Path | None = None) -> str:
+    """Ejecuta el ETL y el entrenamiento en una misma corrida registrada.
+
+    Args:
+        csv_path: CSV de entrada; por defecto el de ``data/raw/``.
+        db_path: ruta de ``structured.db``; por defecto la de ``config``.
+
+    Returns:
+        El ``run_id`` de la corrida.
+    """
+
+    def steps() -> None:
+        run_etl_steps(csv_path, db_path)
+        run_training_steps(db_path)
+
+    return _run_registered(steps, db_path)
+
+
 def main() -> None:
-    """Punto de entrada: corre el ETL y muestra el log por consola."""
+    """Punto de entrada: corre el ETL y el entrenamiento y muestra el log."""
     logging.basicConfig(
         level=logging.INFO, format="%(levelname)s %(name)s: %(message)s"
     )
-    run_etl()
+    run_pipeline()
 
 
 if __name__ == "__main__":

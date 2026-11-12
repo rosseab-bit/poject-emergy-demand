@@ -179,3 +179,36 @@ def test_evaluate_real_data_holdout() -> None:
     np.testing.assert_array_equal(
         fitted.estimator.named_steps["imputer"].statistics_, stats_before
     )
+
+
+def real_dataset() -> pd.DataFrame:
+    """Dataset real con variables derivadas y target."""
+    return features.build_dataset(data.flag_repeated_power(data.load_raw()))
+
+
+def test_train_all_covers_every_model_and_scenario() -> None:
+    """Devuelve una corrida por modelo y escenario, con los mismos cortes."""
+    runs = train.train_all(
+        real_dataset(), scenarios=("A", "B"), model_names=(models.LOGISTIC_REGRESSION,)
+    )
+    assert [(r.scenario, r.model) for r in runs] == [
+        ("A", models.LOGISTIC_REGRESSION),
+        ("B", models.LOGISTIC_REGRESSION),
+    ]
+    for run in runs:
+        assert (run.n_train, run.n_test) == (188, 48)
+        assert len(run.search.cv_scores) == config.CV_SPLITS
+        assert sum(map(sum, run.test.confusion_matrix)) == 48
+    a, b = runs
+    assert a.features == features.FEATURES_A
+    assert b.features == features.FEATURES_B
+
+
+def test_train_model_is_reproducible() -> None:
+    """Dos entrenamientos iguales dan las mismas métricas y probabilidades."""
+    ds = real_dataset()
+    first = train.train_model(ds, models.RANDOM_FOREST, "A")
+    second = train.train_model(ds, models.RANDOM_FOREST, "A")
+    assert first.search.best_params == second.search.best_params
+    assert first.test.f1 == second.test.f1
+    assert first.test.proba == second.test.proba
