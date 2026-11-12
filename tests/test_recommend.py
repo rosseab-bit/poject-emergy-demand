@@ -224,3 +224,13 @@ def test_scores_from_table_reads_one_scenario() -> None:
     assert scores[0] == ModelScore(LR, 0.44, 0.18, 0.17, 0.4)
     with pytest.raises(ValueError, match="escenario C"):
         recommend.scores_from_table(table, "C")
+
+
+def test_beats_reference_requires_a_margin_larger_than_the_own_deviation() -> None:
+    """Supera la referencia solo si el margen es mayor que su desvío."""
+    assert recommend.beats_reference(score(LR, 0.50, 0.05, ref=0.40)) is True
+    assert (
+        recommend.beats_reference(score(LR, 0.45, 0.05, ref=0.40)) is False
+    )  # igual al desvío
+    assert recommend.beats_reference(score(LR, 0.41, 0.05, ref=0.40)) is False
+    assert recommend.beats_reference(score(LR, 0.30, 0.05, ref=0.40)) is False

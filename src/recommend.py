@@ -124,6 +124,11 @@ def _validate(scores: list[ModelScore]) -> None:
             raise ValueError(f"Métricas no numéricas en {score.model}: {score}")
 
 
+def beats_reference(score: ModelScore) -> bool:
+    """Un modelo supera a «siempre alta» si el margen es mayor que su propio desvío."""
+    return score.f1 - score.reference_f1 > score.cv_std
+
+
 def _category(clear_winner: bool, beats_reference: bool) -> str:
     """Categoría de la conclusión según las dos preguntas de la regla."""
     if clear_winner:
@@ -166,7 +171,7 @@ def evaluate_scenario(scores: list[ModelScore], scenario: str) -> Verdict:
     clear_winner = len(candidates) == 1
     chosen = next(s for s in ordered if s.model == candidates[0])
     margin = chosen.f1 - chosen.reference_f1
-    beats = margin > chosen.cv_std
+    beats = beats_reference(chosen)
     cv_best = max(ordered, key=lambda s: (s.cv_mean, -complexity_rank(s.model)))
     return Verdict(
         scenario=scenario,

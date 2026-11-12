@@ -49,6 +49,7 @@ class ReportData:
         predictions: predicciones guardadas de la corrida (más vieja primero);
             vacío si no se pidió incluirlas.
         notes: avisos sobre lo que no se pudo leer o limita la trazabilidad.
+        predictions_included: si se pidió incluir las predicciones en el reporte.
     """
 
     run_id: str
@@ -62,6 +63,7 @@ class ReportData:
     conclusions: dict[str, ScenarioConclusion]
     predictions: list[dict[str, object]]
     notes: list[str] = field(default_factory=list)
+    predictions_included: bool = True
 
 
 def traceability_notes(config: dict[str, object]) -> list[str]:
@@ -172,4 +174,5 @@ def collect_report_data(
         conclusions=conclusions,
         predictions=predictions,
         notes=notes,
+        predictions_included=include_predictions,
     )
