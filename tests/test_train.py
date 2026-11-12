@@ -258,3 +258,16 @@ def test_train_model_includes_baselines() -> None:
     assert (
         sum(map(sum, run.baselines[train.BASELINE_ALWAYS_HIGH].confusion_matrix)) == 48
     )
+
+
+def test_train_model_keeps_holdout_dates_and_true_values() -> None:
+    """El ModelRun guarda el mes y el valor real de cada fila del hold-out."""
+    ds = real_dataset()
+    run = train.train_model(ds, models.LOGISTIC_REGRESSION, "A")
+    assert len(run.test_dates) == len(run.y_test) == len(run.test.y_pred) == 48
+    assert run.test_dates[0] == "2022-09-01"
+    assert run.test_dates[-1] == "2026-08-01"
+    assert run.test_dates == sorted(run.test_dates)
+    assert sum(run.y_test) == 12
+    cm = run.test.confusion_matrix
+    assert cm[1][0] + cm[1][1] == sum(run.y_test)

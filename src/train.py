@@ -18,6 +18,7 @@ from sklearn.metrics import (
 from sklearn.model_selection import GridSearchCV, TimeSeriesSplit
 
 from src import config, features, models
+from src.data import DATE_COLUMN
 from src.logger import log_step
 
 logger = logging.getLogger(__name__)
@@ -210,6 +211,8 @@ class ModelRun:
         search: resultado de la búsqueda (validación cruzada y pipeline).
         test: métricas en el hold-out.
         baselines: métricas de las líneas de referencia en el mismo hold-out.
+        test_dates: mes de cada fila del hold-out (``AAAA-MM-DD``).
+        y_test: valor real del target en cada fila del hold-out.
     """
 
     scenario: str
@@ -220,6 +223,8 @@ class ModelRun:
     search: SearchResult
     test: EvalResult
     baselines: dict[str, EvalResult]
+    test_dates: list[str]
+    y_test: list[int]
 
 
 @log_step
@@ -300,6 +305,10 @@ def train_model(dataset: pd.DataFrame, name: str, scenario: str) -> ModelRun:
         search=search,
         test=test,
         baselines=baselines,
+        test_dates=dataset.loc[x_test.index, DATE_COLUMN]
+        .dt.strftime("%Y-%m-%d")
+        .tolist(),
+        y_test=[int(v) for v in y_test],
     )
 
 
