@@ -56,3 +56,17 @@ def use_trained(trained_run: dict, monkeypatch: pytest.MonkeyPatch) -> dict:
     )
     monkeypatch.setattr(config, "MODELS_DIR", trained_run["models_dir"])
     return trained_run
+
+
+@pytest.fixture(scope="session")
+def trained_report_data(trained_run: dict):
+    """Datos del reporte de la corrida entrenada (LR y RF en A y B), sin predicciones."""
+    from src import report_data
+
+    return report_data.collect_report_data(
+        trained_run["run_id"],
+        include_predictions=False,
+        db_path=trained_run["db_path"],
+        unstructured_path=trained_run["unstructured_path"],
+        models_dir=trained_run["models_dir"],
+    )
