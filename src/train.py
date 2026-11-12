@@ -1,6 +1,7 @@
 """Validación, búsqueda de hiperparámetros, evaluación y guardado de modelos."""
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import numpy as np
@@ -325,6 +326,7 @@ def train_all(
     scenarios: tuple[str, ...] = ("A", "B"),
     model_names: tuple[str, ...] = models.MODEL_NAMES,
     seed: int = config.SEED,
+    on_progress: Callable[[int, int, str], None] | None = None,
 ) -> list[ModelRun]:
     """Entrena todos los modelos en todos los escenarios, con los mismos cortes.
 
@@ -333,12 +335,17 @@ def train_all(
         scenarios: escenarios a entrenar.
         model_names: modelos a entrenar.
         seed: semilla de los modelos; por defecto ``config.SEED``.
+        on_progress: función opcional que se llama al terminar cada modelo con
+            ``(terminados, total, "<escenario>/<modelo>")``; sirve para mostrar
+            una barra de progreso.
 
     Returns:
         Un ``ModelRun`` por combinación escenario y modelo.
     """
-    return [
-        train_model(dataset, name, scenario, seed)
-        for scenario in scenarios
-        for name in model_names
-    ]
+    combos = [(scenario, name) for scenario in scenarios for name in model_names]
+    runs = []
+    for done, (scenario, name) in enumerate(combos, start=1):
+        runs.append(train_model(dataset, name, scenario, seed))
+        if on_progress is not None:
+            on_progress(done, len(combos), f"{scenario}/{name}")
+    return runs

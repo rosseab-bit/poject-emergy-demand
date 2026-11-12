@@ -357,3 +357,19 @@ def load_model(doc: dict, models_dir: Path | None = None) -> object:
     if file_sha256(path) != info["sha256"]:
         raise ValueError(f"El hash de {path.name} no coincide con el guardado")
     return joblib.load(path)
+
+
+def has_results(run_id: str, db_path: Path | None = None) -> bool:
+    """Indica si una corrida ya tiene resultados guardados en la Tabla 2.
+
+    Args:
+        run_id: identificador de la corrida.
+        db_path: ruta de ``unstructured.db``; por defecto la de ``config``.
+    """
+    path = db_path if db_path is not None else config.UNSTRUCTURED_DB_PATH
+    db.init_unstructured_db(path)
+    with db.get_connection(path) as conn:
+        row = conn.execute(
+            "SELECT 1 FROM resultados_modelos WHERE run_id = ? LIMIT 1", (run_id,)
+        ).fetchone()
+    return row is not None

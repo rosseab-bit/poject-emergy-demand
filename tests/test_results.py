@@ -319,3 +319,9 @@ def test_build_run_config_uses_the_given_seed() -> None:
     """La configuración guarda la semilla recibida; por defecto, la de config."""
     assert results.build_run_config(seed=7)["seed"] == 7
     assert results.build_run_config()["seed"] == config.SEED
+
+
+def test_has_results(saved: tuple[Path, Path]) -> None:
+    """Indica si la corrida tiene resultados guardados."""
+    assert results.has_results("run1", saved[0]) is True
+    assert results.has_results("otra", saved[0]) is False

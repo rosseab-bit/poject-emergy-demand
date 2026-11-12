@@ -296,3 +296,17 @@ def test_train_model_with_other_seed_is_reproducible_and_differs() -> None:
     c = train.train_model(ds, models.RANDOM_FOREST, "A", seed=8)
     assert a.test.proba == b.test.proba
     assert a.test.proba != c.test.proba
+
+
+def test_train_all_reports_progress_after_each_model() -> None:
+    """on_progress se llama al terminar cada modelo con (hechos, total, etiqueta)."""
+    calls: list[tuple[int, int, str]] = []
+    train.train_all(
+        real_dataset(),
+        model_names=(models.LOGISTIC_REGRESSION,),
+        on_progress=lambda done, total, label: calls.append((done, total, label)),
+    )
+    assert calls == [
+        (1, 2, "A/logistic_regression"),
+        (2, 2, "B/logistic_regression"),
+    ]
