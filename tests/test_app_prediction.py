@@ -188,3 +188,14 @@ def test_page_does_not_break_other_pages_without_data(tmp_config: Path) -> None:
         at.sidebar.radio[0].set_value(page).run()
         assert not at.exception, page
     assert db.get_run("noexiste") is None
+
+
+def test_sidebar_marks_the_prediction_step_as_done(use_trained: dict) -> None:
+    """Tras predecir, la barra lateral muestra el paso Predicción como hecho."""
+    at = open_page()
+    side = lambda: "\n".join(m.value for m in at.sidebar.markdown)
+    assert "⬜ Reporte — pendiente" in side()
+    at = predict_click(at)
+    assert not at.exception
+    assert "✅ Predicción — hecho" in "\n".join(m.value for m in at.sidebar.markdown)
+    assert "⬜ Reporte — pendiente" in "\n".join(m.value for m in at.sidebar.markdown)

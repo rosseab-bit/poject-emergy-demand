@@ -54,9 +54,9 @@ def run_steps(
 ) -> dict[str, bool]:
     """Indica qué pasos de una corrida están hechos.
 
-    El ETL se deduce de sus eventos en ``logs`` y el entrenamiento de los
-    resultados guardados. Predicción y reporte quedan pendientes hasta que
-    existan esas etapas.
+    El ETL se deduce de sus eventos en ``logs``, el entrenamiento de los
+    resultados guardados y la predicción de la colección ``predicciones``.
+    El reporte queda pendiente hasta que exista esa etapa.
 
     Args:
         run_id: identificador de la corrida.
@@ -76,9 +76,26 @@ def run_steps(
     return {
         STEP_ETL: not etl.empty,
         STEP_TRAINING: results.has_results(run_id, unstructured_path),
-        STEP_PREDICTION: False,
+        STEP_PREDICTION: has_predictions(run_id, unstructured_path),
         STEP_REPORT: False,
     }
+
+
+def has_predictions(run_id: str, unstructured_path: Path | None = None) -> bool:
+    """Indica si una corrida tiene al menos una predicción guardada.
+
+    Args:
+        run_id: identificador de la corrida.
+        unstructured_path: ruta de ``unstructured.db``; por defecto la de
+            ``config``.
+    """
+    path = unstructured_path or config.UNSTRUCTURED_DB_PATH
+    db.init_unstructured_db(path)
+    with db.get_connection(path) as conn:
+        row = conn.execute(
+            "SELECT 1 FROM predicciones WHERE run_id = ? LIMIT 1", (run_id,)
+        ).fetchone()
+    return row is not None
 
 
 def run_summary(
