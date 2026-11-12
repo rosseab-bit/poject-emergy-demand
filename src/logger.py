@@ -8,7 +8,8 @@ desde Streamlit.
 import functools
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from contextvars import ContextVar
 from pathlib import Path
 
@@ -17,6 +18,21 @@ from src import db
 ROOT_LOGGER_NAME = "src"
 
 current_run_id: ContextVar[str | None] = ContextVar("current_run_id", default=None)
+_muted: ContextVar[bool] = ContextVar("logging_muted", default=False)
+
+
+@contextmanager
+def muted() -> Iterator[None]:
+    """Silencia el guardado en ``logs`` dentro del bloque.
+
+    Sirve para lecturas de la interfaz que reutilizan funciones con
+    ``@log_step``: mirar una página no debe agregar eventos al historial.
+    """
+    token = _muted.set(True)
+    try:
+        yield
+    finally:
+        _muted.reset(token)
 
 
 class SQLiteHandler(logging.Handler):
@@ -34,6 +50,8 @@ class SQLiteHandler(logging.Handler):
 
     def emit(self, record: logging.LogRecord) -> None:
         """Inserta un evento en ``logs`` (abre una conexión por evento)."""
+        if _muted.get():
+            return
         try:
             with db.get_connection(self.db_path) as conn:
                 conn.execute(

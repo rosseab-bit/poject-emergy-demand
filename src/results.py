@@ -10,6 +10,8 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 import joblib
+import numpy as np
+import pandas as pd
 
 from src import config, db, features, models
 from src.logger import log_step
@@ -101,11 +103,14 @@ def git_info(repo_dir: Path | None = None) -> dict[str, str | bool | None]:
 
 
 @log_step
-def reproducibility_info(csv_path: Path | None = None) -> dict[str, object]:
+def reproducibility_info(
+    csv_path: Path | None = None, seed: int = config.SEED
+) -> dict[str, object]:
     """Reúne lo necesario para repetir una corrida.
 
     Args:
         csv_path: CSV original; por defecto ``config.RAW_CSV_PATH``.
+        seed: semilla de la corrida; por defecto ``config.SEED``.
 
     Returns:
         Diccionario con ``seed``, ``dataset_sha256``, ``versions``,
@@ -114,7 +119,7 @@ def reproducibility_info(csv_path: Path | None = None) -> dict[str, object]:
     path = csv_path if csv_path is not None else config.RAW_CSV_PATH
     git = git_info()
     info = {
-        "seed": config.SEED,
+        "seed": seed,
         "dataset_sha256": file_sha256(path),
         "versions": library_versions(),
         "git_commit": git["commit"],
@@ -141,11 +146,14 @@ def to_json(doc: dict) -> str:
     return json.dumps(doc, ensure_ascii=False, default=_json_default)
 
 
-def build_run_config(csv_path: Path | None = None) -> dict[str, object]:
+def build_run_config(
+    csv_path: Path | None = None, seed: int = config.SEED
+) -> dict[str, object]:
     """Arma el documento de configuración de una corrida (Tabla 3).
 
     Args:
         csv_path: CSV original; por defecto ``config.RAW_CSV_PATH``.
+        seed: semilla de la corrida; por defecto ``config.SEED``.
 
     Returns:
         Reproducibilidad (semilla, hash, versiones, commit) más los parámetros
@@ -153,7 +161,7 @@ def build_run_config(csv_path: Path | None = None) -> dict[str, object]:
         de cada escenario y grillas de hiperparámetros.
     """
     return {
-        **reproducibility_info(csv_path),
+        **reproducibility_info(csv_path, seed),
         "holdout_months": config.HOLDOUT_MONTHS,
         "cv_splits": config.CV_SPLITS,
         "target": {
@@ -351,3 +359,54 @@ def load_model(doc: dict, models_dir: Path | None = None) -> object:
     if file_sha256(path) != info["sha256"]:
         raise ValueError(f"El hash de {path.name} no coincide con el guardado")
     return joblib.load(path)
+
+
+def has_results(run_id: str, db_path: Path | None = None) -> bool:
+    """Indica si una corrida ya tiene resultados guardados en la Tabla 2.
+
+    Args:
+        run_id: identificador de la corrida.
+        db_path: ruta de ``unstructured.db``; por defecto la de ``config``.
+    """
+    path = db_path if db_path is not None else config.UNSTRUCTURED_DB_PATH
+    db.init_unstructured_db(path)
+    with db.get_connection(path) as conn:
+        row = conn.execute(
+            "SELECT 1 FROM resultados_modelos WHERE run_id = ? LIMIT 1", (run_id,)
+        ).fetchone()
+    return row is not None
+
+
+def feature_importance(estimator: object, feature_names: list[str]) -> pd.DataFrame:
+    """Importancia de cada variable en un pipeline ya entrenado.
+
+    - Regresión logística: coeficientes (las variables están estandarizadas
+      dentro del pipeline, así que son comparables; el signo indica el sentido).
+    - Random Forest y XGBoost: ``feature_importances_`` (suman 1, sin signo).
+
+    Args:
+        estimator: ``Pipeline`` con un paso final llamado ``clf``.
+        feature_names: nombres de las variables, en el orden de entrenamiento.
+
+    Returns:
+        DataFrame con ``feature``, ``importancia`` y ``tipo`` (``coeficiente``
+        o ``importancia``), ordenado de mayor a menor valor absoluto.
+
+    Raises:
+        ValueError: si el clasificador no expone coeficientes ni importancias o
+            su cantidad no coincide con las variables.
+    """
+    clf = estimator.named_steps["clf"]
+    if hasattr(clf, "coef_"):
+        values, kind = np.ravel(clf.coef_), "coeficiente"
+    elif hasattr(clf, "feature_importances_"):
+        values, kind = np.asarray(clf.feature_importances_), "importancia"
+    else:
+        raise ValueError(f"{type(clf).__name__} no expone importancias de variables")
+    if len(values) != len(feature_names):
+        raise ValueError("La cantidad de variables no coincide con el modelo")
+    table = pd.DataFrame(
+        {"feature": feature_names, "importancia": values.astype(float), "tipo": kind}
+    )
+    order = table["importancia"].abs().sort_values(ascending=False).index
+    return table.loc[order].reset_index(drop=True)

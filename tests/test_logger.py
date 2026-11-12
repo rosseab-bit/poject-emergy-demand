@@ -128,3 +128,43 @@ def test_log_step_logs_error_and_reraises(db_path: Path) -> None:
     rows = read_logs(db_path)
     assert [r["level"] for r in rows] == ["INFO", "ERROR"]
     assert "ValueError: datos malos" in rows[1]["message"]
+
+
+def test_muted_blocks_writes_only_inside_the_block(
+    log: logging.Logger, db_path: Path
+) -> None:
+    """Dentro de muted() no se guarda nada; antes y después sí."""
+    log.info("antes")
+    with logger.muted():
+        log.info("silenciado")
+        log.error("también silenciado")
+    log.info("después")
+    assert [r["message"] for r in read_logs(db_path)] == ["antes", "después"]
+
+
+def test_muted_is_restored_even_if_the_block_fails(
+    log: logging.Logger, db_path: Path
+) -> None:
+    """Si el bloque lanza una excepción, el logger vuelve a guardar."""
+    with pytest.raises(RuntimeError), logger.muted():
+        raise RuntimeError("falla")
+    log.info("sigue funcionando")
+    assert [r["message"] for r in read_logs(db_path)] == ["sigue funcionando"]
+
+
+def test_muted_nests_and_silences_log_step(
+    log: logging.Logger, db_path: Path, step_logging: None
+) -> None:
+    """Un paso con @log_step dentro de muted() tampoco deja eventos."""
+
+    @logger.log_step
+    def paso() -> int:
+        return 1
+
+    with logger.muted():
+        with logger.muted():
+            paso()
+        paso()
+    assert read_logs(db_path) == []
+    paso()
+    assert len(read_logs(db_path)) == 2

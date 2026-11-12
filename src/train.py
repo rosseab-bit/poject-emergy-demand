@@ -1,6 +1,7 @@
 """Validación, búsqueda de hiperparámetros, evaluación y guardado de modelos."""
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import numpy as np
@@ -86,7 +87,10 @@ def make_cv() -> TimeSeriesSplit:
 
 @log_step
 def search_hyperparameters(
-    name: str, x_train: pd.DataFrame, y_train: pd.Series
+    name: str,
+    x_train: pd.DataFrame,
+    y_train: pd.Series,
+    seed: int = config.SEED,
 ) -> SearchResult:
     """Busca los mejores hiperparámetros con ``TimeSeriesSplit`` y F1.
 
@@ -98,13 +102,14 @@ def search_hyperparameters(
         name: uno de ``models.MODEL_NAMES``.
         x_train: variables de entrenamiento, ordenadas por fecha.
         y_train: target de entrenamiento.
+        seed: semilla de los modelos; por defecto ``config.SEED``.
 
     Returns:
         ``SearchResult`` con los mejores parámetros, el F1 por corte (promedio
         y desvío) y el pipeline reajustado.
     """
     search = GridSearchCV(
-        models.build_pipeline(name, y_train),
+        models.build_pipeline(name, y_train, seed),
         models.get_param_grid(name),
         scoring=F1_SCORER,
         cv=make_cv(),
@@ -233,12 +238,13 @@ def evaluate_baselines(
     y_train: pd.Series,
     x_test: pd.DataFrame,
     y_test: pd.Series,
+    seed: int = config.SEED,
 ) -> dict[str, EvalResult]:
     """Evalúa dos líneas de referencia sin información de las variables.
 
     - ``siempre_alta``: marca todos los meses como "alta".
     - ``aleatorio_proporcional``: sortea la clase según la proporción de
-      positivos del entrenamiento (con la semilla de ``config``).
+      positivos del entrenamiento (con la semilla dada).
 
     Sirven para saber si un modelo aporta algo más que el azar o que la regla
     trivial. Se ajustan solo con el entrenamiento.
@@ -248,15 +254,14 @@ def evaluate_baselines(
         y_train: target de entrenamiento.
         x_test: variables del hold-out.
         y_test: target del hold-out.
+        seed: semilla del sorteo; por defecto ``config.SEED``.
 
     Returns:
         Diccionario nombre de referencia a ``EvalResult``.
     """
     references = {
         BASELINE_ALWAYS_HIGH: DummyClassifier(strategy="constant", constant=1),
-        BASELINE_RANDOM: DummyClassifier(
-            strategy="stratified", random_state=config.SEED
-        ),
+        BASELINE_RANDOM: DummyClassifier(strategy="stratified", random_state=seed),
     }
     results = {}
     for name, dummy in references.items():
@@ -266,7 +271,9 @@ def evaluate_baselines(
 
 
 @log_step
-def train_model(dataset: pd.DataFrame, name: str, scenario: str) -> ModelRun:
+def train_model(
+    dataset: pd.DataFrame, name: str, scenario: str, seed: int = config.SEED
+) -> ModelRun:
     """Entrena y evalúa un modelo en un escenario.
 
     Separa el hold-out temporal, busca hiperparámetros solo con el
@@ -276,15 +283,16 @@ def train_model(dataset: pd.DataFrame, name: str, scenario: str) -> ModelRun:
         dataset: salida de ``features.build_dataset``.
         name: uno de ``models.MODEL_NAMES``.
         scenario: ``"A"`` o ``"B"``.
+        seed: semilla de los modelos; por defecto ``config.SEED``.
 
     Returns:
         ``ModelRun`` con la búsqueda y la evaluación.
     """
     x, y = features.get_model_data(dataset, scenario)
     x_train, x_test, y_train, y_test = split_holdout(x, y)
-    search = search_hyperparameters(name, x_train, y_train)
+    search = search_hyperparameters(name, x_train, y_train, seed)
     test = evaluate(search.estimator, x_test, y_test)
-    baselines = evaluate_baselines(x_train, y_train, x_test, y_test)
+    baselines = evaluate_baselines(x_train, y_train, x_test, y_test, seed)
     logger.info(
         "Resultado %s/%s: F1 validación %.3f ± %.3f, F1 hold-out %.3f "
         "(siempre alta %.3f, aleatorio %.3f)",
@@ -317,6 +325,8 @@ def train_all(
     dataset: pd.DataFrame,
     scenarios: tuple[str, ...] = ("A", "B"),
     model_names: tuple[str, ...] = models.MODEL_NAMES,
+    seed: int = config.SEED,
+    on_progress: Callable[[int, int, str], None] | None = None,
 ) -> list[ModelRun]:
     """Entrena todos los modelos en todos los escenarios, con los mismos cortes.
 
@@ -324,12 +334,18 @@ def train_all(
         dataset: salida de ``features.build_dataset``.
         scenarios: escenarios a entrenar.
         model_names: modelos a entrenar.
+        seed: semilla de los modelos; por defecto ``config.SEED``.
+        on_progress: función opcional que se llama al terminar cada modelo con
+            ``(terminados, total, "<escenario>/<modelo>")``; sirve para mostrar
+            una barra de progreso.
 
     Returns:
         Un ``ModelRun`` por combinación escenario y modelo.
     """
-    return [
-        train_model(dataset, name, scenario)
-        for scenario in scenarios
-        for name in model_names
-    ]
+    combos = [(scenario, name) for scenario in scenarios for name in model_names]
+    runs = []
+    for done, (scenario, name) in enumerate(combos, start=1):
+        runs.append(train_model(dataset, name, scenario, seed))
+        if on_progress is not None:
+            on_progress(done, len(combos), f"{scenario}/{name}")
+    return runs

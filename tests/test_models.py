@@ -102,3 +102,20 @@ def test_unknown_model_raises() -> None:
         models.build_pipeline("svm")
     with pytest.raises(ValueError, match="Modelo inválido"):
         models.get_param_grid("svm")
+
+
+@pytest.mark.parametrize("name", models.MODEL_NAMES)
+def test_custom_seed_reaches_the_model(name: str) -> None:
+    """Una semilla distinta llega al clasificador y por defecto es la de config."""
+    _, y = make_data()
+    assert models.build_pipeline(name, y, seed=7).named_steps["clf"].random_state == 7
+    default = models.build_pipeline(name, y).named_steps["clf"]
+    assert default.random_state == config.SEED
+
+
+def test_different_seeds_give_different_forests() -> None:
+    """Random Forest con semillas distintas da probabilidades distintas."""
+    x, y = make_data()
+    a = models.build_pipeline(models.RANDOM_FOREST, y, seed=1).fit(x, y)
+    b = models.build_pipeline(models.RANDOM_FOREST, y, seed=2).fit(x, y)
+    assert not np.array_equal(a.predict_proba(x), b.predict_proba(x))
