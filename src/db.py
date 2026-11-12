@@ -5,8 +5,10 @@ comparten) en modo WAL y la cierra al terminar.
 """
 
 import sqlite3
+import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 
 from src import config
@@ -69,3 +71,67 @@ def init_structured_db(db_path: Path | None = None) -> None:
     """
     with get_connection(db_path) as conn:
         conn.executescript(SCHEMA_STRUCTURED)
+
+
+def now_iso() -> str:
+    """Devuelve la fecha y hora actual en UTC, formato ISO 8601."""
+    return datetime.now(UTC).isoformat(timespec="seconds")
+
+
+def new_run_id() -> str:
+    """Genera un ``run_id`` corto: 8 caracteres hexadecimales."""
+    return uuid.uuid4().hex[:8]
+
+
+def create_run(
+    seed: int | None = None,
+    notes: str | None = None,
+    db_path: Path | None = None,
+) -> str:
+    """Registra una corrida nueva con estado ``running``.
+
+    Args:
+        seed: semilla de la corrida; por defecto ``config.SEED``.
+        notes: comentario libre opcional.
+        db_path: ruta de la base; por defecto ``structured.db``.
+
+    Returns:
+        El ``run_id`` generado.
+    """
+    run_id = new_run_id()
+    seed = config.SEED if seed is None else seed
+    with get_connection(db_path) as conn:
+        conn.execute(
+            "INSERT INTO runs (run_id, started_at, status, seed, notes) "
+            "VALUES (?, ?, 'running', ?, ?)",
+            (run_id, now_iso(), seed, notes),
+        )
+    return run_id
+
+
+def finish_run(run_id: str, status: str, db_path: Path | None = None) -> None:
+    """Cierra una corrida con su estado final.
+
+    Args:
+        run_id: identificador de la corrida.
+        status: ``ok`` o ``error``.
+        db_path: ruta de la base; por defecto ``structured.db``.
+
+    Raises:
+        ValueError: si el estado no es válido o el ``run_id`` no existe.
+    """
+    if status not in ("ok", "error"):
+        raise ValueError(f"Estado inválido: {status!r}")
+    with get_connection(db_path) as conn:
+        cur = conn.execute(
+            "UPDATE runs SET finished_at = ?, status = ? WHERE run_id = ?",
+            (now_iso(), status, run_id),
+        )
+        if cur.rowcount == 0:
+            raise ValueError(f"run_id inexistente: {run_id}")
+
+
+def get_run(run_id: str, db_path: Path | None = None) -> sqlite3.Row | None:
+    """Devuelve la fila de una corrida, o ``None`` si no existe."""
+    with get_connection(db_path) as conn:
+        return conn.execute("SELECT * FROM runs WHERE run_id = ?", (run_id,)).fetchone()
