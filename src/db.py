@@ -46,6 +46,24 @@ CREATE TABLE IF NOT EXISTS datos_limpios (
 );
 """
 
+SCHEMA_UNSTRUCTURED = """
+CREATE TABLE IF NOT EXISTS resultados_modelos (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id     TEXT NOT NULL,
+    scenario   TEXT NOT NULL,
+    model      TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    doc        TEXT NOT NULL CHECK (json_valid(doc)),
+    UNIQUE (run_id, scenario, model)
+);
+
+CREATE TABLE IF NOT EXISTS configuracion (
+    run_id     TEXT PRIMARY KEY,
+    created_at TEXT NOT NULL,
+    doc        TEXT NOT NULL CHECK (json_valid(doc))
+);
+"""
+
 
 @contextmanager
 def get_connection(db_path: Path | None = None) -> Iterator[sqlite3.Connection]:
@@ -146,3 +164,17 @@ def get_run(run_id: str, db_path: Path | None = None) -> sqlite3.Row | None:
     """Devuelve la fila de una corrida, o ``None`` si no existe."""
     with get_connection(db_path) as conn:
         return conn.execute("SELECT * FROM runs WHERE run_id = ?", (run_id,)).fetchone()
+
+
+def init_unstructured_db(db_path: Path | None = None) -> None:
+    """Crea las tablas ``resultados_modelos`` y ``configuracion`` si no existen.
+
+    Ambas guardan un documento JSON por fila (``doc``), que se consulta con
+    ``json_extract``. El ``run_id`` las conecta con ``structured.db``.
+
+    Args:
+        db_path: ruta de la base; por defecto ``unstructured.db``.
+    """
+    path = db_path if db_path is not None else config.UNSTRUCTURED_DB_PATH
+    with get_connection(path) as conn:
+        conn.executescript(SCHEMA_UNSTRUCTURED)

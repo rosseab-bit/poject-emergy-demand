@@ -113,3 +113,84 @@ def test_get_run_missing_returns_none(db_path: Path) -> None:
     """get_run devuelve None si no existe."""
     db.init_structured_db(db_path)
     assert db.get_run("noexiste", db_path) is None
+
+
+@pytest.fixture
+def udb_path(tmp_path: Path) -> Path:
+    """Ruta de una base no estructurada temporal."""
+    path = tmp_path / "unstructured.db"
+    db.init_unstructured_db(path)
+    return path
+
+
+def insert_result(path: Path, run_id: str, scenario: str, model: str, doc: str) -> None:
+    """Inserta una fila en resultados_modelos."""
+    with db.get_connection(path) as conn:
+        conn.execute(
+            "INSERT INTO resultados_modelos (run_id, scenario, model, created_at, doc) "
+            "VALUES (?, ?, ?, 'now', ?)",
+            (run_id, scenario, model, doc),
+        )
+
+
+def test_init_unstructured_creates_tables_and_wal(udb_path: Path) -> None:
+    """Se crean las dos tablas y la base queda en modo WAL."""
+    with db.get_connection(udb_path) as conn:
+        names = {
+            r["name"]
+            for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
+        mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
+    assert {"resultados_modelos", "configuracion"} <= names
+    assert mode == "wal"
+
+
+def test_init_unstructured_is_idempotent(udb_path: Path) -> None:
+    """Llamar dos veces no borra datos."""
+    insert_result(udb_path, "r1", "A", "xgboost", '{"f1": 0.5}')
+    db.init_unstructured_db(udb_path)
+    with db.get_connection(udb_path) as conn:
+        assert (
+            conn.execute("SELECT COUNT(*) FROM resultados_modelos").fetchone()[0] == 1
+        )
+
+
+def test_json_extract_reads_nested_values(udb_path: Path) -> None:
+    """Se puede recuperar un valor anidado con json_extract."""
+    doc = '{"holdout": {"f1": 0.44}, "cv": {"scores": [0.1, 0.2, 0.3]}}'
+    insert_result(udb_path, "r1", "A", "logistic_regression", doc)
+    with db.get_connection(udb_path) as conn:
+        row = conn.execute(
+            "SELECT json_extract(doc, '$.holdout.f1') AS f1, "
+            "json_extract(doc, '$.cv.scores[2]') AS last_cv "
+            "FROM resultados_modelos WHERE run_id = 'r1' AND scenario = 'A'"
+        ).fetchone()
+    assert row["f1"] == 0.44
+    assert row["last_cv"] == 0.3
+
+
+def test_invalid_json_is_rejected(udb_path: Path) -> None:
+    """Un documento que no es JSON válido no se puede guardar."""
+    with pytest.raises(sqlite3.IntegrityError):
+        insert_result(udb_path, "r1", "A", "xgboost", "esto no es json")
+    with pytest.raises(sqlite3.IntegrityError), db.get_connection(udb_path) as conn:
+        conn.execute(
+            "INSERT INTO configuracion (run_id, created_at, doc) VALUES ('r1', 'now', '{')"
+        )
+
+
+def test_result_is_unique_per_run_scenario_and_model(udb_path: Path) -> None:
+    """No se repite (run_id, escenario, modelo), pero sí varía cualquiera."""
+    insert_result(udb_path, "r1", "A", "xgboost", "{}")
+    insert_result(udb_path, "r1", "B", "xgboost", "{}")
+    insert_result(udb_path, "r2", "A", "xgboost", "{}")
+    with pytest.raises(sqlite3.IntegrityError):
+        insert_result(udb_path, "r1", "A", "xgboost", "{}")
+
+
+def test_one_configuration_per_run(udb_path: Path) -> None:
+    """configuracion tiene una sola fila por run_id."""
+    with db.get_connection(udb_path) as conn:
+        conn.execute("INSERT INTO configuracion VALUES ('r1', 'now', '{}')")
+    with pytest.raises(sqlite3.IntegrityError), db.get_connection(udb_path) as conn:
+        conn.execute("INSERT INTO configuracion VALUES ('r1', 'now', '{}')")
