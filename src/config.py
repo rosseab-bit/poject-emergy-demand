@@ -25,3 +25,6 @@ UNSTRUCTURED_DB_PATH: Path = DB_DIR / "unstructured.db"
 # Validación temporal: meses finales reservados como hold-out.
 # Valor provisorio: el plan (sección 8) deja el tamaño final por definir.
 HOLDOUT_MONTHS: int = 36
+
+# Temperatura base (°C) para los grados-día de frío y calor.
+BASE_TEMP_C: float = 18.0
