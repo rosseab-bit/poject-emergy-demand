@@ -22,9 +22,11 @@ RAW_CSV_PATH: Path = DATA_RAW_DIR / "demanda_electricidad_original_mensual2.csv"
 STRUCTURED_DB_PATH: Path = DB_DIR / "structured.db"
 UNSTRUCTURED_DB_PATH: Path = DB_DIR / "unstructured.db"
 
-# Validación temporal: meses finales reservados como hold-out.
-# Valor provisorio: el plan (sección 8) deja el tamaño final por definir.
-HOLDOUT_MONTHS: int = 36
+# Validación temporal: meses finales reservados como hold-out (12 positivos
+# en los últimos 48 meses, contra 7 en 36) y cortes de TimeSeriesSplit en el
+# resto (con 3 cortes cada validación tiene al menos 6 positivos).
+HOLDOUT_MONTHS: int = 48
+CV_SPLITS: int = 3
 
 # Temperatura base (°C) para los grados-día de frío y calor.
 BASE_TEMP_C: float = 18.0
