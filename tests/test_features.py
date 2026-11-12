@@ -125,3 +125,89 @@ def test_lags_real_data_sector_lag12_starts_in_2006() -> None:
     first_valid = out.loc[out[col].notna(), "fecha"].iloc[0]
     assert first_valid == pd.Timestamp("2006-01-01")
     assert out[features.lag_column_name("demanda_total", 12)].iloc[:12].isna().all()
+
+
+def make_target_frame(n: int = 80, seed: int = 0) -> pd.DataFrame:
+    """Demanda mensual sintética con estacionalidad, tendencia y ruido."""
+    rng = np.random.default_rng(seed)
+    months = np.arange(n)
+    demand = 1000 + 5 * months + 80 * np.sin(2 * np.pi * months / 12)
+    demand = demand + rng.normal(0, 25, n)
+    return pd.DataFrame(
+        {
+            "fecha": pd.date_range("2001-01-01", periods=n, freq="MS"),
+            "demanda_total": demand,
+        }
+    )
+
+
+def test_ratio_is_demand_over_mean_of_same_month_previous_years() -> None:
+    """El cociente usa los meses 12, 24 y 36 atrás."""
+    df = make_target_frame()
+    d = df["demanda_total"]
+    ratio = features.compute_demand_ratio(d)
+    t = 50
+    expected = d[t] / np.mean([d[t - 12], d[t - 24], d[t - 36]])
+    assert ratio[t] == pytest.approx(expected)
+    assert ratio.iloc[:36].isna().all()
+    assert ratio.iloc[36:].notna().all()
+
+
+def test_threshold_is_quantile_of_previous_ratios_only() -> None:
+    """El umbral de t es el cuantil de los 36 cocientes anteriores, sin t."""
+    out = features.add_target(make_target_frame())
+    t = 75
+    previous = out["cociente_demanda"].iloc[t - 36 : t]
+    assert out["umbral_demanda"].iloc[t] == pytest.approx(previous.quantile(0.75))
+    assert out["demanda_alta"].iloc[t] == int(
+        out["cociente_demanda"].iloc[t] > out["umbral_demanda"].iloc[t]
+    )
+
+
+def test_target_is_null_without_enough_history() -> None:
+    """Sin 36 meses de historia de cocientes el target es nulo."""
+    out = features.add_target(make_target_frame())
+    first_valid = 36 + 36
+    assert out["demanda_alta"].iloc[:first_valid].isna().all()
+    assert out["demanda_alta"].iloc[first_valid:].notna().all()
+    assert set(out["demanda_alta"].dropna().unique()) <= {0, 1}
+
+
+def test_target_does_not_use_future_data_truncation() -> None:
+    """El target de cada mes es el mismo con la serie completa o cortada ahí."""
+    df = make_target_frame()
+    full = features.add_target(df)
+    for t in (72, 75, 79):
+        cut = features.add_target(df.iloc[: t + 1])
+        assert cut["demanda_alta"].iloc[t] == full["demanda_alta"].iloc[t]
+        pd.testing.assert_series_equal(
+            cut["demanda_alta"], full["demanda_alta"].iloc[: t + 1]
+        )
+
+
+def test_target_does_not_change_when_future_values_change() -> None:
+    """Alterar la demanda futura no cambia el target de meses anteriores."""
+    df = make_target_frame()
+    base = features.add_target(df)
+    changed = df.copy()
+    changed.loc[70:, "demanda_total"] *= 5
+    out = features.add_target(changed)
+    cols = ["cociente_demanda", "umbral_demanda", "demanda_alta"]
+    pd.testing.assert_frame_equal(base.loc[:69, cols], out.loc[:69, cols])
+
+
+def test_target_rejects_non_consecutive_months() -> None:
+    """Con un mes faltante falla."""
+    df = make_target_frame().drop(index=10).reset_index(drop=True)
+    with pytest.raises(ValueError, match="Faltan meses"):
+        features.add_target(df)
+
+
+def test_target_real_data_matches_plan() -> None:
+    """Con los datos reales: 236 meses con target desde 2007-01, 60 positivos."""
+    out = features.add_target(data.flag_repeated_power(data.load_raw()))
+    valid = out.dropna(subset=["demanda_alta"])
+    assert len(valid) == 236
+    assert valid["fecha"].iloc[0] == pd.Timestamp("2007-01-01")
+    assert int(valid["demanda_alta"].sum()) == 60
+    assert int(valid["demanda_alta"].iloc[-36:].sum()) == 7

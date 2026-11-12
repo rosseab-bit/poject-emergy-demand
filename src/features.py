@@ -10,6 +10,9 @@ from src.logger import log_step
 TEMPERATURE_COLUMN = "temperatura_promedio"
 COLD_COLUMN = "grados_dia_frio"
 HEAT_COLUMN = "grados_dia_calor"
+RATIO_COLUMN = "cociente_demanda"
+THRESHOLD_COLUMN = "umbral_demanda"
+TARGET_COLUMN = "demanda_alta"
 TOTAL_COLUMN = "demanda_total"
 LAG_SOURCE_COLUMNS = [TOTAL_COLUMN, *SECTOR_COLUMNS]
 LAGS = (1, 12)
@@ -88,4 +91,65 @@ def add_lag_features(df: pd.DataFrame) -> pd.DataFrame:
     for column in LAG_SOURCE_COLUMNS:
         for lag in LAGS:
             out[lag_column_name(column, lag)] = out[column].shift(lag)
+    return out
+
+
+def compute_demand_ratio(
+    demand: pd.Series, years_back: int = config.TARGET_YEARS_BACK
+) -> pd.Series:
+    """Cociente entre la demanda del mes y el promedio del mismo mes previo.
+
+    El promedio es el de los mismos meses calendario de los ``years_back``
+    años anteriores (12, 24 y 36 meses atrás). Es nulo si falta alguno.
+
+    Args:
+        demand: demanda total mensual, un mes tras otro.
+        years_back: cantidad de años previos a promediar.
+
+    Returns:
+        Serie con el cociente, nula en los primeros ``12 * years_back`` meses.
+    """
+    previous = pd.concat(
+        [demand.shift(12 * k) for k in range(1, years_back + 1)], axis=1
+    )
+    return demand / previous.mean(axis=1, skipna=False)
+
+
+@log_step
+def add_target(
+    df: pd.DataFrame,
+    window: int = config.TARGET_WINDOW_MONTHS,
+    quantile: float = config.TARGET_QUANTILE,
+) -> pd.DataFrame:
+    """Agrega el target binario ``demanda_alta`` con umbral móvil.
+
+    Un mes es "alto" (1) si su cociente supera el cuantil de los cocientes de
+    los ``window`` meses anteriores (sin incluir el propio mes). Usa solo el
+    pasado: el valor de la fila ``t`` depende únicamente de filas ``<= t``.
+    Los meses sin historia suficiente quedan en nulo.
+
+    Las columnas ``cociente_demanda`` y ``umbral_demanda`` salen de la demanda
+    del propio mes: sirven para auditar el target y **no deben usarse como
+    predictores**.
+
+    Args:
+        df: datos ordenados por fecha, un mes tras otro, con ``demanda_total``.
+        window: meses de cocientes que forman el umbral.
+        quantile: cuantil que define "alta" (0,75 = 25 % superior).
+
+    Returns:
+        Copia de ``df`` con ``cociente_demanda``, ``umbral_demanda`` y
+        ``demanda_alta`` (entero con nulos).
+
+    Raises:
+        ValueError: si las fechas no son mensuales y consecutivas.
+    """
+    validate_monthly_dates(df[DATE_COLUMN])
+    out = df.copy()
+    ratio = compute_demand_ratio(out[TOTAL_COLUMN])
+    threshold = ratio.rolling(window, min_periods=window).quantile(quantile).shift(1)
+    target = (ratio > threshold).astype("Int64").where(threshold.notna())
+    out[RATIO_COLUMN] = ratio
+    out[THRESHOLD_COLUMN] = threshold
+    out[TARGET_COLUMN] = target
     return out

@@ -28,3 +28,9 @@ HOLDOUT_MONTHS: int = 36
 
 # Temperatura base (°C) para los grados-día de frío y calor.
 BASE_TEMP_C: float = 18.0
+
+# Target "demanda alta": cociente contra el mismo mes de los N años previos y
+# umbral móvil = cuantil de los cocientes de los últimos M meses (solo pasado).
+TARGET_YEARS_BACK: int = 3
+TARGET_WINDOW_MONTHS: int = 36
+TARGET_QUANTILE: float = 0.75
