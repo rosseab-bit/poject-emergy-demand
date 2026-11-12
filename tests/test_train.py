@@ -117,3 +117,65 @@ def test_search_hyperparameters_real_data_uses_only_training_rows() -> None:
     res = train.search_hyperparameters(models.LOGISTIC_REGRESSION, x_tr, y_tr)
     assert len(res.cv_scores) == config.CV_SPLITS
     assert res.estimator.named_steps["imputer"].statistics_.shape[0] == x_tr.shape[1]
+
+
+class FixedEstimator:
+    """Estimador falso que devuelve predicciones fijas."""
+
+    def __init__(self, pred: list[int]) -> None:
+        self.pred = np.array(pred)
+
+    def predict(self, x: pd.DataFrame) -> np.ndarray:
+        return self.pred
+
+    def predict_proba(self, x: pd.DataFrame) -> np.ndarray:
+        return np.column_stack([1 - self.pred * 0.9, self.pred * 0.9])
+
+
+def test_evaluate_known_values() -> None:
+    """Métricas y matriz de confusión con un caso calculado a mano."""
+    y = pd.Series([1, 1, 0, 0, 1])
+    est = FixedEstimator([1, 0, 0, 1, 1])  # tp=2, fn=1, fp=1, tn=1
+    res = train.evaluate(est, pd.DataFrame({"a": range(5)}), y)
+    assert res.confusion_matrix == [[1, 1], [1, 2]]
+    assert res.accuracy == pytest.approx(0.6)
+    assert res.precision == pytest.approx(2 / 3)
+    assert res.recall == pytest.approx(2 / 3)
+    assert res.f1 == pytest.approx(2 / 3)
+    assert res.y_pred == [1, 0, 0, 1, 1]
+    assert res.proba == pytest.approx([0.9, 0.0, 0.0, 0.9, 0.9])
+
+
+def test_evaluate_without_positive_predictions() -> None:
+    """Sin positivos predichos precision, recall y F1 valen 0, sin error."""
+    y = pd.Series([1, 0, 0, 1])
+    res = train.evaluate(FixedEstimator([0, 0, 0, 0]), pd.DataFrame({"a": range(4)}), y)
+    assert (res.precision, res.recall, res.f1) == (0.0, 0.0, 0.0)
+    assert res.accuracy == pytest.approx(0.5)
+    assert res.confusion_matrix == [[2, 0], [2, 0]]
+
+
+def test_evaluate_confusion_matrix_is_2x2_with_one_class() -> None:
+    """Aunque el test tenga una sola clase, la matriz es de 2x2."""
+    y = pd.Series([0, 0, 0])
+    res = train.evaluate(FixedEstimator([0, 0, 0]), pd.DataFrame({"a": range(3)}), y)
+    assert res.confusion_matrix == [[3, 0], [0, 0]]
+
+
+def test_evaluate_real_data_holdout() -> None:
+    """Con datos reales: se evalúan las 48 filas del hold-out sin reajustar."""
+    ds = features.build_dataset(data.flag_repeated_power(data.load_raw()))
+    x, y = features.get_model_data(ds, "A")
+    x_tr, x_te, y_tr, y_te = train.split_holdout(x, y)
+    fitted = train.search_hyperparameters(models.LOGISTIC_REGRESSION, x_tr, y_tr)
+    stats_before = fitted.estimator.named_steps["imputer"].statistics_.copy()
+    res = train.evaluate(fitted.estimator, x_te, y_te)
+    cm = np.array(res.confusion_matrix)
+    assert cm.sum() == 48
+    assert cm[1].sum() == 12
+    assert len(res.y_pred) == len(res.proba) == 48
+    for value in (res.accuracy, res.precision, res.recall, res.f1):
+        assert 0.0 <= value <= 1.0
+    np.testing.assert_array_equal(
+        fitted.estimator.named_steps["imputer"].statistics_, stats_before
+    )

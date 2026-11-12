@@ -6,7 +6,14 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 from sklearn.base import BaseEstimator
-from sklearn.metrics import f1_score, make_scorer
+from sklearn.metrics import (
+    accuracy_score,
+    confusion_matrix,
+    f1_score,
+    make_scorer,
+    precision_score,
+    recall_score,
+)
 from sklearn.model_selection import GridSearchCV, TimeSeriesSplit
 
 from src import config, models
@@ -119,5 +126,68 @@ def search_hyperparameters(
         result.cv_mean,
         result.cv_std,
         result.best_params,
+    )
+    return result
+
+
+@dataclass
+class EvalResult:
+    """Métricas de un modelo sobre un conjunto de prueba (clase positiva = alta).
+
+    Attributes:
+        accuracy: proporción de aciertos.
+        precision: de lo que predijo "alta", cuánto lo era.
+        recall: de lo que era "alta", cuánto detectó.
+        f1: media armónica de precision y recall.
+        confusion_matrix: ``[[tn, fp], [fn, tp]]``.
+        y_pred: clase predicha de cada mes (0 o 1).
+        proba: probabilidad de "alta" de cada mes.
+    """
+
+    accuracy: float
+    precision: float
+    recall: float
+    f1: float
+    confusion_matrix: list[list[int]]
+    y_pred: list[int]
+    proba: list[float]
+
+
+@log_step
+def evaluate(
+    estimator: BaseEstimator, x_test: pd.DataFrame, y_test: pd.Series
+) -> EvalResult:
+    """Evalúa un pipeline ya ajustado sobre datos que no vio (clase 1 = alta).
+
+    No reajusta nada. Si no predice ningún positivo, precision y F1 valen 0.
+
+    Args:
+        estimator: pipeline ajustado con ``predict`` y ``predict_proba``.
+        x_test: variables del conjunto de prueba.
+        y_test: target real del conjunto de prueba.
+
+    Returns:
+        ``EvalResult`` con accuracy, precision, recall, F1, matriz de confusión,
+        predicciones y probabilidades.
+    """
+    y_pred = estimator.predict(x_test)
+    proba = estimator.predict_proba(x_test)[:, 1]
+    result = EvalResult(
+        accuracy=float(accuracy_score(y_test, y_pred)),
+        precision=float(precision_score(y_test, y_pred, zero_division=0)),
+        recall=float(recall_score(y_test, y_pred, zero_division=0)),
+        f1=float(f1_score(y_test, y_pred, zero_division=0)),
+        confusion_matrix=confusion_matrix(y_test, y_pred, labels=[0, 1]).tolist(),
+        y_pred=[int(p) for p in y_pred],
+        proba=[float(p) for p in proba],
+    )
+    logger.info(
+        "Evaluación: accuracy %.3f, precision %.3f, recall %.3f, F1 %.3f, "
+        "matriz de confusión %s",
+        result.accuracy,
+        result.precision,
+        result.recall,
+        result.f1,
+        result.confusion_matrix,
     )
     return result
