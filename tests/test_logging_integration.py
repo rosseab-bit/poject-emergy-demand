@@ -1,22 +1,11 @@
 """Prueba de integración: corrida completa con logger, run_id y @log_step."""
 
 import logging
-from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 
 from src import db, logger
-
-
-@pytest.fixture
-def clean_root_logger() -> Iterator[None]:
-    """Deja el logger raíz del paquete como estaba al terminar."""
-    root = logging.getLogger(logger.ROOT_LOGGER_NAME)
-    old_level, old_handlers = root.level, list(root.handlers)
-    yield
-    root.setLevel(old_level)
-    root.handlers[:] = old_handlers
 
 
 @pytest.mark.usefixtures("clean_root_logger")
