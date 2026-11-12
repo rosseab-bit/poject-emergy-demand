@@ -1,0 +1,39 @@
+"""Estado de la interfaz: corrida elegida y semilla de la próxima corrida.
+
+Solo guarda preferencias de pantalla. Los datos y resultados viven en las
+bases y se leen con ``src.queries``.
+"""
+
+import streamlit as st
+
+RUN_KEY = "run_selector"
+PAGE_KEY = "page"
+SEED_KEY = "seed"
+PENDING_RUN_KEY = "_pending_run"
+
+
+def current_run_id() -> str | None:
+    """Devuelve el ``run_id`` elegido en la barra lateral, o ``None``."""
+    return st.session_state.get(RUN_KEY)
+
+
+def current_seed(default: int) -> int:
+    """Devuelve la semilla escrita en la barra lateral (para la próxima corrida)."""
+    return int(st.session_state.get(SEED_KEY, default))
+
+
+def select_run(run_id: str) -> None:
+    """Pide que la barra lateral pase a mostrar ``run_id`` y vuelve a ejecutar.
+
+    Streamlit no deja cambiar un widget ya creado en la misma ejecución, así que
+    el pedido queda pendiente y lo aplica ``apply_pending_run`` al empezar.
+    """
+    st.session_state[PENDING_RUN_KEY] = run_id
+    st.rerun()
+
+
+def apply_pending_run() -> None:
+    """Aplica la corrida pedida con ``select_run``; llamar antes del selector."""
+    pending = st.session_state.pop(PENDING_RUN_KEY, None)
+    if pending is not None:
+        st.session_state[RUN_KEY] = pending
