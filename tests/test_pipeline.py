@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from src import data, db, pipeline
+from src import data, db, pipeline, results
 
 
 @pytest.mark.usefixtures("clean_root_logger")
@@ -63,10 +63,14 @@ def test_run_etl_failure_is_logged_and_run_marked_error(tmp_path: Path) -> None:
 
 
 @pytest.mark.usefixtures("clean_root_logger")
-def test_run_pipeline_trains_six_results_and_logs_them(tmp_path: Path) -> None:
-    """La corrida completa deja 6 resultados (3 modelos x 2 escenarios) en logs."""
+def test_run_pipeline_trains_saves_and_links_everything(tmp_path: Path) -> None:
+    """La corrida completa entrena 6 resultados y los guarda atados al run_id."""
     db_path = tmp_path / "structured.db"
-    run_id = pipeline.run_pipeline(db_path=db_path)
+    udb_path = tmp_path / "unstructured.db"
+    models_dir = tmp_path / "models"
+    run_id = pipeline.run_pipeline(
+        db_path=db_path, unstructured_path=udb_path, models_dir=models_dir
+    )
 
     assert db.get_run(run_id, db_path)["status"] == "ok"
     with db.get_connection(db_path) as conn:
@@ -75,9 +79,37 @@ def test_run_pipeline_trains_six_results_and_logs_them(tmp_path: Path) -> None:
         ).fetchall()
         orphans = conn.execute("SELECT COUNT(*) FROM logs WHERE run_id IS NULL")
         assert orphans.fetchone()[0] == 0
-    results = [r["message"] for r in rows if r["message"].startswith("Resultado ")]
-    assert len(results) == 6
-    for scenario in ("A", "B"):
-        for model in ("logistic_regression", "random_forest", "xgboost"):
-            assert any(m.startswith(f"Resultado {scenario}/{model}:") for m in results)
+        db.attach_unstructured(conn, udb_path)
+        joined = conn.execute(
+            "SELECT m.scenario, m.model, json_extract(m.doc, '$.holdout.f1') AS f1 "
+            "FROM runs r JOIN unstructured.resultados_modelos m "
+            "ON m.run_id = r.run_id WHERE r.run_id = ?",
+            (run_id,),
+        ).fetchall()
+        config_rows = conn.execute(
+            "SELECT json_extract(doc, '$.seed') AS seed "
+            "FROM unstructured.configuracion WHERE run_id = ?",
+            (run_id,),
+        ).fetchall()
+
+    messages = [r["message"] for r in rows]
+    trained = [
+        m for m in messages if m.startswith("Resultado ") and "F1 validación" in m
+    ]
+    assert len(trained) == 6
+    assert sum(m.startswith("Resultado guardado:") for m in messages) == 6
     assert not any(r["level"] == "ERROR" for r in rows)
+
+    expected = {
+        (s, m)
+        for s in ("A", "B")
+        for m in ("logistic_regression", "random_forest", "xgboost")
+    }
+    assert {(r["scenario"], r["model"]) for r in joined} == expected
+    assert all(0.0 <= r["f1"] <= 1.0 for r in joined)
+    assert [r["seed"] for r in config_rows] == [42]
+
+    assert len(list(models_dir.glob("*.joblib"))) == 6
+    for scenario, model in expected:
+        doc = results.load_result(run_id, scenario, model, udb_path)
+        assert results.load_model(doc, models_dir) is not None
