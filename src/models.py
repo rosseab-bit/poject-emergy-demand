@@ -20,6 +20,18 @@ XGBOOST = "xgboost"
 # Del más simple al más complejo (se usa para desempatar).
 MODEL_NAMES = (LOGISTIC_REGRESSION, RANDOM_FOREST, XGBOOST)
 
+MODEL_LABELS = {
+    LOGISTIC_REGRESSION: "Regresión logística",
+    RANDOM_FOREST: "Random Forest",
+    XGBOOST: "XGBoost",
+}
+
+
+def model_label(name: str) -> str:
+    """Nombre legible de un modelo; devuelve el mismo texto si no lo conoce."""
+    return MODEL_LABELS.get(name, name)
+
+
 PARAM_GRIDS: dict[str, dict[str, list]] = {
     LOGISTIC_REGRESSION: {"clf__C": [0.01, 0.1, 1.0, 10.0]},
     RANDOM_FOREST: {
