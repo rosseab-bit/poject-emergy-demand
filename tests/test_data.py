@@ -1,0 +1,75 @@
+"""Tests de src/data.py."""
+
+from pathlib import Path
+
+import pandas as pd
+import pytest
+
+from src import data
+
+
+def write_csv(path: Path, rows: list[dict]) -> Path:
+    """Escribe un CSV mínimo con las columnas del dataset."""
+    cols = [data.RAW_DATE_COLUMN, *data.VALUE_COLUMNS, "extra_distribuidora"]
+    pd.DataFrame(rows, columns=cols).to_csv(path, index=False)
+    return path
+
+
+def make_rows(dates: list[str]) -> list[dict]:
+    """Arma filas de prueba para las fechas dadas."""
+    return [
+        {
+            data.RAW_DATE_COLUMN: d,
+            "demanda_total": 100.0 + i,
+            "demanda_residencial": 40.0,
+            "comercio_e_industria": 30.0,
+            "grandes_usuarios": 30.0,
+            "temperatura_promedio": 20.0,
+            "potencia_maxima": 200.0 + i,
+            "extra_distribuidora": 1.0,
+        }
+        for i, d in enumerate(dates)
+    ]
+
+
+def test_load_raw_keeps_only_used_columns(tmp_path: Path) -> None:
+    """Devuelve fecha y columnas de valores, sin las de distribuidoras."""
+    path = write_csv(tmp_path / "a.csv", make_rows(["2020-01-01", "2020-02-01"]))
+    df = data.load_raw(path)
+    assert list(df.columns) == [data.DATE_COLUMN, *data.VALUE_COLUMNS]
+    assert len(df) == 2
+    assert pd.api.types.is_datetime64_any_dtype(df[data.DATE_COLUMN])
+
+
+def test_load_raw_real_csv() -> None:
+    """El CSV real se lee completo: 308 filas de 2001-01 a 2026-08."""
+    df = data.load_raw()
+    assert len(df) == 308
+    assert df[data.DATE_COLUMN].iloc[0] == pd.Timestamp("2001-01-01")
+    assert df[data.DATE_COLUMN].iloc[-1] == pd.Timestamp("2026-08-01")
+
+
+def test_load_raw_missing_column(tmp_path: Path) -> None:
+    """Si falta una columna requerida lanza ValueError."""
+    pd.DataFrame({data.RAW_DATE_COLUMN: ["2020-01-01"]}).to_csv(
+        tmp_path / "b.csv", index=False
+    )
+    with pytest.raises(ValueError, match="Faltan columnas"):
+        data.load_raw(tmp_path / "b.csv")
+
+
+@pytest.mark.parametrize(
+    ("dates", "message"),
+    [
+        (["2020-01-01", "2020-01-01"], "duplicadas"),
+        (["2020-02-01", "2020-01-01"], "ordenadas"),
+        (["2020-01-15", "2020-02-15"], "primer día"),
+        (["2020-01-01", "2020-03-01"], "Faltan meses"),
+        (["2020-01-01", "no es fecha"], "nulas"),
+    ],
+)
+def test_load_raw_invalid_dates(tmp_path: Path, dates: list[str], message: str) -> None:
+    """Fechas duplicadas, desordenadas, irregulares o ilegibles fallan."""
+    path = write_csv(tmp_path / "c.csv", make_rows(dates))
+    with pytest.raises(ValueError, match=message):
+        data.load_raw(path)
