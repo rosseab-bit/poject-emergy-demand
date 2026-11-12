@@ -1,13 +1,17 @@
 """Tests de src/results.py (datos de reproducibilidad)."""
 
 import hashlib
+import json
+import sqlite3
 import subprocess
 from pathlib import Path
 
+import numpy as np
 import pytest
 import sklearn
 
-from src import config, results
+from src import config, data, db, features, models, results, train
+from src.train import ModelRun
 
 
 def test_file_sha256_matches_hashlib(tmp_path: Path) -> None:
@@ -81,3 +85,126 @@ def test_reproducibility_info_has_every_field() -> None:
     assert "scikit-learn" in info["versions"]
     assert len(info["git_commit"]) == 40
     assert isinstance(info["git_dirty"], bool)
+
+
+@pytest.fixture(scope="module")
+def model_run() -> ModelRun:
+    """Un ModelRun real (regresión logística, escenario A), entrenado una vez."""
+    ds = features.build_dataset(data.flag_repeated_power(data.load_raw()))
+    return train.train_model(ds, models.LOGISTIC_REGRESSION, "A")
+
+
+@pytest.fixture
+def udb(tmp_path: Path) -> Path:
+    """Base no estructurada temporal."""
+    path = tmp_path / "unstructured.db"
+    db.init_unstructured_db(path)
+    return path
+
+
+def fetch_doc(path: Path, table: str, where: str, args: tuple) -> dict:
+    """Lee y decodifica el documento JSON de una fila."""
+    with db.get_connection(path) as conn:
+        row = conn.execute(f"SELECT doc FROM {table} WHERE {where}", args).fetchone()
+    return json.loads(row["doc"])
+
+
+def test_save_run_config_stores_reproducibility_and_settings(udb: Path) -> None:
+    """La Tabla 3 guarda semilla, hash, versiones, commit y parámetros."""
+    results.save_run_config("run1", results.build_run_config(), udb)
+    with db.get_connection(udb) as conn:
+        row = conn.execute(
+            "SELECT json_extract(doc, '$.seed') AS seed, "
+            "json_extract(doc, '$.holdout_months') AS holdout, "
+            "json_extract(doc, '$.versions.scikit-learn') AS sk, "
+            "json_extract(doc, '$.dataset_sha256') AS sha "
+            "FROM configuracion WHERE run_id = 'run1'"
+        ).fetchone()
+    assert row["seed"] == config.SEED
+    assert row["holdout"] == config.HOLDOUT_MONTHS
+    assert row["sk"] == sklearn.__version__
+    assert row["sha"] == results.file_sha256(config.RAW_CSV_PATH)
+    doc = fetch_doc(udb, "configuracion", "run_id = ?", ("run1",))
+    assert doc["scenarios"]["A"] == features.FEATURES_A
+    assert doc["scenarios"]["B"] == features.FEATURES_B
+    assert doc["target"]["window_months"] == config.TARGET_WINDOW_MONTHS
+
+
+def test_save_run_config_rejects_duplicate_run(udb: Path) -> None:
+    """Una corrida tiene una sola configuración."""
+    results.save_run_config("run1", {"seed": 1}, udb)
+    with pytest.raises(sqlite3.IntegrityError):
+        results.save_run_config("run1", {"seed": 1}, udb)
+
+
+def test_save_model_run_writes_file_and_row(
+    model_run: ModelRun, udb: Path, tmp_path: Path
+) -> None:
+    """Se guarda el .joblib y una fila cuyo hash coincide con el archivo."""
+    models_dir = tmp_path / "models"
+    path = results.save_model_run("run1", model_run, models_dir, udb)
+    assert path == models_dir / "run1_A_logistic_regression.joblib"
+    assert path.is_file()
+    doc = fetch_doc(
+        udb, "resultados_modelos", "run_id = ? AND scenario = ?", ("run1", "A")
+    )
+    assert doc["model_file"] == {
+        "name": path.name,
+        "sha256": results.file_sha256(path),
+    }
+    assert doc["params"] == model_run.search.best_params
+    assert doc["cv"]["scores"] == model_run.search.cv_scores
+    assert doc["holdout"]["confusion_matrix"] == model_run.test.confusion_matrix
+    assert "y_pred" not in doc["holdout"]
+    assert set(doc["baselines"]) == {"siempre_alta", "aleatorio_proporcional"}
+    assert doc["features"] == features.FEATURES_A
+
+
+def test_saved_predictions_are_one_per_holdout_month(
+    model_run: ModelRun, udb: Path, tmp_path: Path
+) -> None:
+    """El JSON trae una predicción por mes del hold-out con sus campos."""
+    results.save_model_run("run1", model_run, tmp_path / "m", udb)
+    doc = fetch_doc(udb, "resultados_modelos", "run_id = ?", ("run1",))
+    preds = doc["predictions"]
+    assert len(preds) == 48
+    assert set(preds[0]) == {"fecha", "real", "predicho", "probabilidad"}
+    assert preds[0]["fecha"] == "2022-09-01"
+    assert [p["predicho"] for p in preds] == model_run.test.y_pred
+    assert sum(p["real"] for p in preds) == 12
+
+
+def test_save_model_run_rejects_duplicates_without_touching_files(
+    model_run: ModelRun, udb: Path, tmp_path: Path
+) -> None:
+    """Guardar dos veces el mismo resultado falla y no pisa el archivo."""
+    models_dir = tmp_path / "models"
+    path = results.save_model_run("run1", model_run, models_dir, udb)
+    before = results.file_sha256(path)
+    with pytest.raises(ValueError, match="Ya existe"):
+        results.save_model_run("run1", model_run, models_dir, udb)
+    assert results.file_sha256(path) == before
+
+
+def test_save_model_run_cleans_up_file_if_db_insert_fails(
+    model_run: ModelRun,
+    udb: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Si falla el guardado en la base, no queda el .joblib huérfano."""
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("falla")
+
+    monkeypatch.setattr(results, "build_result_doc", boom)
+    models_dir = tmp_path / "models"
+    with pytest.raises(RuntimeError):
+        results.save_model_run("run1", model_run, models_dir, udb)
+    assert list(models_dir.glob("*.joblib")) == []
+
+
+def test_to_json_handles_numpy_and_none() -> None:
+    """Serializa tipos de numpy y valores nulos de las grillas."""
+    text = results.to_json({"a": np.float64(0.5), "b": np.int64(3), "c": None})
+    assert json.loads(text) == {"a": 0.5, "b": 3, "c": None}
