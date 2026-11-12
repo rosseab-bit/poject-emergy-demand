@@ -2,28 +2,15 @@
 
 from collections.abc import Callable
 
-import streamlit as st
-
-from app_pages import comparacion, datos, entrenamiento, logs, prediccion
+from app_pages import comparacion, datos, entrenamiento, logs, prediccion, reporte
 from app_pages.sidebar import PAGE_NAMES
-
-
-def _placeholder(name: str, detail: str) -> Callable[[], None]:
-    """Crea una página provisoria que explica cuándo estará disponible."""
-
-    def render() -> None:
-        st.header(name)
-        st.info(detail)
-
-    return render
-
 
 PAGES: dict[str, Callable[[], None]] = {
     "Datos": datos.render,
     "Entrenamiento": entrenamiento.render,
     "Comparación": comparacion.render,
     "Predicción": prediccion.render,
-    "Reporte": _placeholder("Reporte", "Disponible en una etapa posterior."),
+    "Reporte": reporte.render,
     "Logs": logs.render,
 }
 assert tuple(PAGES) == PAGE_NAMES

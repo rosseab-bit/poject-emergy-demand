@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from src import config, recommend, report, report_charts, report_data
+from src import config, queries, recommend, report, report_charts, report_data
 
 
 def extract_text(pdf: bytes) -> str:
@@ -321,6 +321,7 @@ def test_report_path_and_exists(tmp_path: Path) -> None:
     assert report.report_exists("abc", tmp_path) is False
 
 
+@pytest.mark.usefixtures("clean_root_logger")
 def test_save_report_writes_and_overwrites(tmp_path: Path) -> None:
     """Guardar crea la carpeta y pisa el archivo anterior."""
     calls = []
@@ -330,13 +331,64 @@ def test_save_report_writes_and_overwrites(tmp_path: Path) -> None:
         return b"%PDF-fake-" + str(len(calls)).encode()
 
     target = tmp_path / "salida" / "reportes"
-    path = report.save_report("r1", False, target, fake, db_path=Path("x.db"))
+    paths = {"db_path": tmp_path / "structured.db"}
+    path = report.save_report("r1", False, target, fake, **paths)
     assert path == target / "reporte_r1.pdf" and path.read_bytes() == b"%PDF-fake-1"
-    report.save_report("r1", True, target, fake)
+    report.save_report("r1", True, target, fake, **paths)
     assert path.read_bytes() == b"%PDF-fake-2"
-    assert calls[0] == ("r1", False, {"db_path": Path("x.db")})
+    assert calls[0] == ("r1", False, paths)
     assert calls[1][1] is True
     assert report.report_exists("r1", target) is True
+
+
+@pytest.mark.usefixtures("clean_root_logger")
+def test_save_report_logs_the_event_under_the_run(tmp_path: Path) -> None:
+    """Generar el reporte deja inicio, el evento con el archivo y fin, atados al run_id."""
+    db_path = tmp_path / "structured.db"
+
+    def fake(run_id, include_predictions, **paths):
+        return b"%PDF-" + b"x" * 3000
+
+    report.save_report("r9", False, tmp_path, fake, db_path=db_path)
+    logs = queries.get_logs("r9", db_path=db_path)
+    messages = logs["message"].tolist()
+    assert messages[0] == "Inicio: _generate_and_write"
+    assert "Reporte generado: reporte_r9.pdf (2 KB, predicciones omitidas)" in messages
+    assert messages[-1].startswith("Fin: _generate_and_write")
+    assert queries.get_logs(db_path=db_path)["run_id"].isna().sum() == 0
+
+
+@pytest.mark.usefixtures("clean_root_logger")
+def test_failed_report_is_logged_as_error_and_leaves_no_file(tmp_path: Path) -> None:
+    """Si falla la generación, queda el error en logs y no se escribe ningún archivo."""
+    db_path = tmp_path / "structured.db"
+
+    def boom(run_id, include_predictions, **paths):
+        raise RuntimeError("no se pudo armar")
+
+    with pytest.raises(RuntimeError, match="no se pudo armar"):
+        report.save_report("r9", True, tmp_path, boom, db_path=db_path)
+    errors = queries.get_logs("r9", levels=["ERROR"], db_path=db_path)
+    assert errors["message"].str.contains("no se pudo armar").any()
+    assert not report.report_exists("r9", tmp_path)
+
+
+def test_report_naming_is_defined_once_in_queries(tmp_path: Path) -> None:
+    """report y queries comparten el nombre del archivo; has_report mira el disco."""
+    assert queries.report_path("abc", tmp_path) == report.report_path("abc", tmp_path)
+    assert queries.has_report("abc", tmp_path) is False
+    (tmp_path / "reporte_abc.pdf").write_bytes(b"%PDF-")
+    assert queries.has_report("abc", tmp_path) is True
+    assert report.report_exists("abc", tmp_path) is True
+
+
+def test_report_step_follows_the_pdf_on_disk(tmp_path: Path) -> None:
+    """El paso Reporte de la corrida está hecho solo si existe su PDF."""
+    paths = {"db_path": tmp_path / "s.db", "unstructured_path": tmp_path / "u.db"}
+    assert queries.run_steps("r1", reports_dir=tmp_path, **paths)["Reporte"] is False
+    (tmp_path / "reporte_r1.pdf").write_bytes(b"%PDF-")
+    assert queries.run_steps("r1", reports_dir=tmp_path, **paths)["Reporte"] is True
+    assert queries.run_steps("otra", reports_dir=tmp_path, **paths)["Reporte"] is False
 
 
 def test_generate_report_reads_only_the_databases(

@@ -7,6 +7,7 @@ trivial «siempre alta», el reporte lo afirma sin maquillaje.
 """
 
 import io
+import logging
 import struct
 from collections.abc import Callable
 from pathlib import Path
@@ -28,10 +29,12 @@ from reportlab.platypus import (
     TableStyle,
 )
 
-from src import config, queries, recommend, report_charts, report_data
+from src import db, logger, queries, recommend, report_charts, report_data
 from src.explain import fmt
 from src.models import MODEL_NAMES, model_label
 from src.report_data import ReportData, ScenarioConclusion
+
+log = logging.getLogger(__name__)
 
 TITLE = "Clasificación de demanda eléctrica mensual"
 INK = colors.HexColor("#0b0b0b")
@@ -788,8 +791,29 @@ def generate_report(
 
 def report_path(run_id: str, reports_dir: Path | None = None) -> Path:
     """Ruta del PDF de una corrida: ``reports/reporte_<run_id>.pdf``."""
-    directory = reports_dir if reports_dir is not None else config.REPORTS_DIR
-    return directory / f"reporte_{run_id}.pdf"
+    return queries.report_path(run_id, reports_dir)
+
+
+@logger.log_step
+def _generate_and_write(
+    run_id: str,
+    include_predictions: bool,
+    reports_dir: Path | None,
+    generate: Callable[..., bytes] | None,
+    paths: dict[str, Path | None],
+) -> Path:
+    """Genera el PDF, lo escribe en disco y deja un evento en el log."""
+    pdf = (generate or generate_report)(run_id, include_predictions, **paths)
+    path = report_path(run_id, reports_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(pdf)
+    log.info(
+        "Reporte generado: %s (%d KB, predicciones %s)",
+        path.name,
+        len(pdf) // 1024,
+        "incluidas" if include_predictions else "omitidas",
+    )
+    return path
 
 
 def save_report(
@@ -801,6 +825,8 @@ def save_report(
 ) -> Path:
     """Genera el reporte y lo guarda en ``reports/``, pisando uno anterior.
 
+    Los eventos quedan en ``logs`` atados al ``run_id``.
+
     Args:
         run_id: corrida entrenada.
         include_predictions: si se incluyen las predicciones guardadas.
@@ -811,13 +837,18 @@ def save_report(
     Returns:
         La ruta del PDF guardado.
     """
-    pdf = (generate or generate_report)(run_id, include_predictions, **paths)
-    path = report_path(run_id, reports_dir)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(pdf)
-    return path
+    db_path = paths.get("db_path")
+    db.init_structured_db(db_path)
+    logger.setup_logging(db_path)
+    token = logger.current_run_id.set(run_id)
+    try:
+        return _generate_and_write(
+            run_id, include_predictions, reports_dir, generate, paths
+        )
+    finally:
+        logger.current_run_id.reset(token)
 
 
 def report_exists(run_id: str, reports_dir: Path | None = None) -> bool:
     """Indica si ya se generó el PDF de una corrida."""
-    return report_path(run_id, reports_dir).is_file()
+    return queries.has_report(run_id, reports_dir)

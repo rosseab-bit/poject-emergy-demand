@@ -47,22 +47,35 @@ def list_runs(db_path: Path | None = None) -> pd.DataFrame:
     )
 
 
+def report_path(run_id: str, reports_dir: Path | None = None) -> Path:
+    """Ruta del PDF de una corrida: ``reports/reporte_<run_id>.pdf``."""
+    directory = reports_dir if reports_dir is not None else config.REPORTS_DIR
+    return directory / f"reporte_{run_id}.pdf"
+
+
+def has_report(run_id: str, reports_dir: Path | None = None) -> bool:
+    """Indica si ya se generó el PDF de una corrida (el archivo existe)."""
+    return report_path(run_id, reports_dir).is_file()
+
+
 def run_steps(
     run_id: str,
     db_path: Path | None = None,
     unstructured_path: Path | None = None,
+    reports_dir: Path | None = None,
 ) -> dict[str, bool]:
     """Indica qué pasos de una corrida están hechos.
 
     El ETL se deduce de sus eventos en ``logs``, el entrenamiento de los
-    resultados guardados y la predicción de la colección ``predicciones``.
-    El reporte queda pendiente hasta que exista esa etapa.
+    resultados guardados, la predicción de la colección ``predicciones`` y el
+    reporte de la existencia del PDF en ``reports/``.
 
     Args:
         run_id: identificador de la corrida.
         db_path: ruta de ``structured.db``; por defecto la de ``config``.
         unstructured_path: ruta de ``unstructured.db``; por defecto la de
             ``config``.
+        reports_dir: carpeta de los PDF; por defecto ``config.REPORTS_DIR``.
 
     Returns:
         Diccionario paso a ``True`` (hecho) o ``False`` (pendiente).
@@ -77,7 +90,7 @@ def run_steps(
         STEP_ETL: not etl.empty,
         STEP_TRAINING: results.has_results(run_id, unstructured_path),
         STEP_PREDICTION: has_predictions(run_id, unstructured_path),
-        STEP_REPORT: False,
+        STEP_REPORT: has_report(run_id, reports_dir),
     }
 
 
