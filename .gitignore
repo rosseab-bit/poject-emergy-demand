@@ -1,0 +1,20 @@
+# Entorno y caché de Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+
+# Datos generados y modelos (se decide al final cómo entregar las bases)
+db/*.db
+db/*.db-*
+models/*.joblib
+reports/*.pdf
+
+# Secretos y editor
+.streamlit/secrets.toml
+.env
+.vscode/
+.idea/
+.DS_Store
