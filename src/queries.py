@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from src import config, data, db, features, models, results
+from src import config, data, db, features, logger, models, results
 
 STEP_ETL = "ETL"
 STEP_TRAINING = "Entrenamiento"
@@ -261,7 +261,8 @@ def data_overview(db_path: Path | None = None) -> dict[str, object] | None:
     clean = data.load_clean_data(db_path)
     if clean.empty:
         return None
-    dataset = features.build_dataset(clean)
+    with logger.muted():  # mirar la página no debe agregar eventos a logs
+        dataset = features.build_dataset(clean)
     _, y = features.get_model_data(dataset, "A")
     labeled = dataset.dropna(subset=[features.TARGET_COLUMN])
     balance = features.class_balance(y)

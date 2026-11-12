@@ -4,6 +4,7 @@ import pandas as pd
 import streamlit as st
 
 from app_pages import state
+from app_pages.tables import STATUS_ICONS
 from src import config, queries
 
 PAGE_NAMES = (
@@ -14,7 +15,6 @@ PAGE_NAMES = (
     "Reporte",
     "Logs",
 )
-STATUS_ICONS = {"ok": "✅", "running": "⏳", "error": "❌"}
 
 
 def _run_label(runs: pd.DataFrame, run_id: str) -> str:
