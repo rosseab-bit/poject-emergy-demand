@@ -432,3 +432,27 @@ def saved_models(run_id: str, scenario: str, db_path: Path | None = None) -> lis
         ).fetchall()
     found = {row["model"] for row in rows}
     return [name for name in models.MODEL_NAMES if name in found]
+
+
+def load_run_config(run_id: str, db_path: Path | None = None) -> dict:
+    """Recupera la configuración guardada de una corrida (Tabla 3).
+
+    Args:
+        run_id: identificador de la corrida.
+        db_path: ruta de ``unstructured.db``; por defecto la de ``config``.
+
+    Returns:
+        El documento decodificado.
+
+    Raises:
+        LookupError: si la corrida no tiene configuración guardada.
+    """
+    path = db_path if db_path is not None else config.UNSTRUCTURED_DB_PATH
+    db.init_unstructured_db(path)
+    with db.get_connection(path) as conn:
+        row = conn.execute(
+            "SELECT doc FROM configuracion WHERE run_id = ?", (run_id,)
+        ).fetchone()
+    if row is None:
+        raise LookupError(f"No hay configuración guardada para la corrida {run_id}")
+    return json.loads(row["doc"])

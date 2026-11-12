@@ -470,3 +470,29 @@ def latest_prediction(
     if row is None:
         return None
     return {**json.loads(row["doc"]), "id": row["id"]}
+
+
+def prediction_docs(
+    run_id: str, unstructured_path: Path | None = None
+) -> list[dict[str, object]]:
+    """Devuelve los documentos de todas las predicciones de una corrida.
+
+    Args:
+        run_id: identificador de la corrida.
+        unstructured_path: ruta de ``unstructured.db``; por defecto la de
+            ``config``.
+
+    Returns:
+        Documentos con su ``id`` y ``created_at``, del más viejo al más nuevo.
+    """
+    path = unstructured_path or config.UNSTRUCTURED_DB_PATH
+    db.init_unstructured_db(path)
+    with db.get_connection(path) as conn:
+        rows = conn.execute(
+            "SELECT id, created_at, doc FROM predicciones WHERE run_id = ? ORDER BY id",
+            (run_id,),
+        ).fetchall()
+    return [
+        {**json.loads(row["doc"]), "id": row["id"], "created_at": row["created_at"]}
+        for row in rows
+    ]
