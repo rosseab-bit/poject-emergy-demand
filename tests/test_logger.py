@@ -82,3 +82,49 @@ def test_setup_logging_is_idempotent(db_path: Path) -> None:
     finally:
         for h in list(root.handlers)[before:]:
             root.removeHandler(h)
+
+
+@pytest.fixture
+def step_logging(db_path: Path) -> Iterator[None]:
+    """Conecta el logger de este módulo (el que usa @log_step) a la base."""
+    module_logger = logging.getLogger(__name__)
+    old_level = module_logger.level
+    handler = logger.SQLiteHandler(db_path)
+    module_logger.setLevel(logging.INFO)
+    module_logger.addHandler(handler)
+    yield
+    module_logger.removeHandler(handler)
+    module_logger.setLevel(old_level)
+
+
+@pytest.mark.usefixtures("step_logging")
+def test_log_step_logs_start_and_end(db_path: Path) -> None:
+    """Un paso exitoso registra inicio y fin y devuelve su resultado."""
+
+    @logger.log_step
+    def suma(a: int, b: int) -> int:
+        """Suma dos números."""
+        return a + b
+
+    assert suma(2, 3) == 5
+    rows = read_logs(db_path)
+    assert [r["level"] for r in rows] == ["INFO", "INFO"]
+    assert rows[0]["message"] == "Inicio: suma"
+    assert rows[1]["message"].startswith("Fin: suma (")
+    assert suma.__name__ == "suma"
+    assert suma.__doc__ == "Suma dos números."
+
+
+@pytest.mark.usefixtures("step_logging")
+def test_log_step_logs_error_and_reraises(db_path: Path) -> None:
+    """Un paso que falla registra ERROR y relanza la misma excepción."""
+
+    @logger.log_step
+    def falla() -> None:
+        raise ValueError("datos malos")
+
+    with pytest.raises(ValueError, match="datos malos"):
+        falla()
+    rows = read_logs(db_path)
+    assert [r["level"] for r in rows] == ["INFO", "ERROR"]
+    assert "ValueError: datos malos" in rows[1]["message"]

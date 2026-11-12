@@ -5,7 +5,10 @@ handler lo toma solo, sin importar si se ejecuta por línea de comandos o
 desde Streamlit.
 """
 
+import functools
 import logging
+import time
+from collections.abc import Callable
 from contextvars import ContextVar
 from pathlib import Path
 
@@ -69,3 +72,41 @@ def setup_logging(
             return logger
     logger.addHandler(SQLiteHandler(db_path))
     return logger
+
+
+def log_step[**P, R](func: Callable[P, R]) -> Callable[P, R]:
+    """Decora un paso del pipeline y registra su inicio, su fin y sus errores.
+
+    Registra ``INFO`` al empezar y al terminar (con la duración) y ``ERROR`` si
+    la función lanza una excepción, que se vuelve a lanzar sin modificarla. El
+    evento queda a nombre del módulo de la función decorada.
+
+    Args:
+        func: función a decorar.
+
+    Returns:
+        La función envuelta, con el mismo nombre y docstring.
+    """
+    step_logger = logging.getLogger(func.__module__)
+
+    @functools.wraps(func)
+    def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
+        step_logger.info("Inicio: %s", func.__name__)
+        start = time.perf_counter()
+        try:
+            result = func(*args, **kwargs)
+        except Exception as exc:
+            elapsed = time.perf_counter() - start
+            step_logger.error(
+                "Error en %s tras %.2f s: %s: %s",
+                func.__name__,
+                elapsed,
+                type(exc).__name__,
+                exc,
+            )
+            raise
+        elapsed = time.perf_counter() - start
+        step_logger.info("Fin: %s (%.2f s)", func.__name__, elapsed)
+        return result
+
+    return wrapper
