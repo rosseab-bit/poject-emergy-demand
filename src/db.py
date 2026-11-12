@@ -178,3 +178,22 @@ def init_unstructured_db(db_path: Path | None = None) -> None:
     path = db_path if db_path is not None else config.UNSTRUCTURED_DB_PATH
     with get_connection(path) as conn:
         conn.executescript(SCHEMA_UNSTRUCTURED)
+
+
+def attach_unstructured(
+    conn: sqlite3.Connection,
+    unstructured_path: Path | None = None,
+    alias: str = "unstructured",
+) -> None:
+    """Adjunta ``unstructured.db`` a una conexión de ``structured.db``.
+
+    Permite consultas cruzadas por ``run_id``, por ejemplo unir ``runs`` con
+    ``unstructured.resultados_modelos``.
+
+    Args:
+        conn: conexión abierta sobre ``structured.db``.
+        unstructured_path: ruta de la base; por defecto la de ``config``.
+        alias: nombre con el que se consulta la base adjunta.
+    """
+    path = unstructured_path or config.UNSTRUCTURED_DB_PATH
+    conn.execute(f"ATTACH DATABASE ? AS {alias}", (str(path),))

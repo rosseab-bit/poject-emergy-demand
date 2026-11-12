@@ -295,3 +295,59 @@ def save_model_run(
         raise
     logger.info("Resultado guardado: %s/%s en %s", run.scenario, run.model, name)
     return model_path
+
+
+def load_result(
+    run_id: str, scenario: str, model: str, db_path: Path | None = None
+) -> dict:
+    """Recupera el documento JSON de un resultado guardado.
+
+    Args:
+        run_id: identificador de la corrida.
+        scenario: ``"A"`` o ``"B"``.
+        model: nombre del modelo.
+        db_path: ruta de ``unstructured.db``; por defecto la de ``config``.
+
+    Returns:
+        El documento decodificado.
+
+    Raises:
+        LookupError: si no existe ese resultado.
+    """
+    path = db_path if db_path is not None else config.UNSTRUCTURED_DB_PATH
+    with db.get_connection(path) as conn:
+        row = conn.execute(
+            "SELECT doc FROM resultados_modelos "
+            "WHERE run_id = ? AND scenario = ? AND model = ?",
+            (run_id, scenario, model),
+        ).fetchone()
+    if row is None:
+        raise LookupError(f"No hay resultado para {run_id}/{scenario}/{model}")
+    return json.loads(row["doc"])
+
+
+def load_model(doc: dict, models_dir: Path | None = None) -> object:
+    """Carga el modelo de un resultado, verificando antes su hash SHA-256.
+
+    Los ``.joblib`` son pickles: cargar uno ajeno puede ejecutar código. Por
+    eso solo se carga si el archivo coincide con el hash guardado al entrenar.
+
+    Args:
+        doc: documento de ``load_result``.
+        models_dir: carpeta de modelos; por defecto ``config.MODELS_DIR``.
+
+    Returns:
+        El pipeline entrenado.
+
+    Raises:
+        FileNotFoundError: si el archivo no existe.
+        ValueError: si el hash no coincide con el guardado.
+    """
+    directory = models_dir if models_dir is not None else config.MODELS_DIR
+    info = doc["model_file"]
+    path = directory / info["name"]
+    if not path.is_file():
+        raise FileNotFoundError(path)
+    if file_sha256(path) != info["sha256"]:
+        raise ValueError(f"El hash de {path.name} no coincide con el guardado")
+    return joblib.load(path)

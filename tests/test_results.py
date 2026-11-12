@@ -208,3 +208,108 @@ def test_to_json_handles_numpy_and_none() -> None:
     """Serializa tipos de numpy y valores nulos de las grillas."""
     text = results.to_json({"a": np.float64(0.5), "b": np.int64(3), "c": None})
     assert json.loads(text) == {"a": 0.5, "b": 3, "c": None}
+
+
+@pytest.fixture
+def saved(model_run: ModelRun, udb: Path, tmp_path: Path) -> tuple[Path, Path]:
+    """Guarda el ModelRun en una base y una carpeta temporales."""
+    models_dir = tmp_path / "models"
+    results.save_model_run("run1", model_run, models_dir, udb)
+    return udb, models_dir
+
+
+def test_load_result_with_json_extract(saved: tuple[Path, Path], model_run) -> None:
+    """Un resultado se recupera con json_extract y con load_result."""
+    udb_path, _ = saved
+    with db.get_connection(udb_path) as conn:
+        row = conn.execute(
+            "SELECT json_extract(doc, '$.holdout.f1') AS f1, "
+            "json_extract(doc, '$.params') AS params "
+            "FROM resultados_modelos "
+            "WHERE run_id = 'run1' AND scenario = 'A' "
+            "AND model = 'logistic_regression'"
+        ).fetchone()
+    assert row["f1"] == model_run.test.f1
+    assert json.loads(row["params"]) == model_run.search.best_params
+    doc = results.load_result("run1", "A", "logistic_regression", udb_path)
+    assert doc["holdout"]["f1"] == model_run.test.f1
+
+
+def test_load_result_missing_raises(saved: tuple[Path, Path]) -> None:
+    """Pedir un resultado que no existe lanza LookupError."""
+    with pytest.raises(LookupError):
+        results.load_result("otra", "A", "xgboost", saved[0])
+
+
+def test_saved_model_reproduces_same_predictions(
+    saved: tuple[Path, Path], tmp_path: Path
+) -> None:
+    """El modelo guardado, con los datos releídos de datos_limpios, repite las
+    mismas probabilidades y predicciones guardadas en el JSON."""
+    udb_path, models_dir = saved
+    sdb = tmp_path / "structured.db"
+    data.save_clean_data(data.flag_repeated_power(data.load_raw()), sdb)
+    dataset = features.build_dataset(data.load_clean_data(sdb))
+    x, y = features.get_model_data(dataset, "A")
+    _, x_test, _, _ = train.split_holdout(x, y)
+
+    doc = results.load_result("run1", "A", "logistic_regression", udb_path)
+    loaded = results.load_model(doc, models_dir)
+    stored = doc["predictions"]
+    np.testing.assert_array_equal(
+        loaded.predict(x_test), [p["predicho"] for p in stored]
+    )
+    np.testing.assert_allclose(
+        loaded.predict_proba(x_test)[:, 1],
+        [p["probabilidad"] for p in stored],
+        rtol=1e-12,
+    )
+    dates = dataset.loc[x_test.index, "fecha"].dt.strftime("%Y-%m-%d").tolist()
+    assert dates == [p["fecha"] for p in stored]
+
+
+def test_load_model_rejects_tampered_file(saved: tuple[Path, Path]) -> None:
+    """Si el archivo fue alterado, no se carga."""
+    udb_path, models_dir = saved
+    doc = results.load_result("run1", "A", "logistic_regression", udb_path)
+    path = models_dir / doc["model_file"]["name"]
+    path.write_bytes(path.read_bytes() + b"x")
+    with pytest.raises(ValueError, match="hash"):
+        results.load_model(doc, models_dir)
+
+
+def test_load_model_missing_file_raises(saved: tuple[Path, Path]) -> None:
+    """Si falta el archivo lanza FileNotFoundError."""
+    udb_path, models_dir = saved
+    doc = results.load_result("run1", "A", "logistic_regression", udb_path)
+    (models_dir / doc["model_file"]["name"]).unlink()
+    with pytest.raises(FileNotFoundError):
+        results.load_model(doc, models_dir)
+
+
+def test_cross_query_with_attach_database(
+    saved: tuple[Path, Path], tmp_path: Path
+) -> None:
+    """Un mismo run_id conecta runs y logs con resultados_modelos vía ATTACH."""
+    udb_path, _ = saved
+    sdb = tmp_path / "structured.db"
+    db.init_structured_db(sdb)
+    run_id = db.create_run(db_path=sdb)
+    with db.get_connection(sdb) as conn:
+        conn.execute("UPDATE runs SET run_id = 'run1' WHERE run_id = ?", (run_id,))
+        conn.execute(
+            "INSERT INTO logs (ts, level, module, message, run_id) "
+            "VALUES ('t', 'INFO', 'src.train', 'Resultado A/logistic_regression', 'run1')"
+        )
+        db.attach_unstructured(conn, udb_path)
+        row = conn.execute(
+            "SELECT r.status, r.seed, m.model, "
+            "json_extract(m.doc, '$.holdout.f1') AS f1, "
+            "(SELECT COUNT(*) FROM logs l WHERE l.run_id = r.run_id) AS n_logs "
+            "FROM runs r JOIN unstructured.resultados_modelos m ON m.run_id = r.run_id"
+        ).fetchone()
+    assert row["status"] == "running"
+    assert row["seed"] == config.SEED
+    assert row["model"] == "logistic_regression"
+    assert 0.0 <= row["f1"] <= 1.0
+    assert row["n_logs"] == 1
