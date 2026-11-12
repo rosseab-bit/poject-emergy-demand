@@ -410,3 +410,25 @@ def feature_importance(estimator: object, feature_names: list[str]) -> pd.DataFr
     )
     order = table["importancia"].abs().sort_values(ascending=False).index
     return table.loc[order].reset_index(drop=True)
+
+
+def saved_models(run_id: str, scenario: str, db_path: Path | None = None) -> list[str]:
+    """Lista los modelos con resultado guardado en una corrida y escenario.
+
+    Args:
+        run_id: identificador de la corrida.
+        scenario: ``"A"`` o ``"B"``.
+        db_path: ruta de ``unstructured.db``; por defecto la de ``config``.
+
+    Returns:
+        Nombres de modelo, de más simple a más complejo.
+    """
+    path = db_path if db_path is not None else config.UNSTRUCTURED_DB_PATH
+    db.init_unstructured_db(path)
+    with db.get_connection(path) as conn:
+        rows = conn.execute(
+            "SELECT model FROM resultados_modelos WHERE run_id = ? AND scenario = ?",
+            (run_id, scenario),
+        ).fetchall()
+    found = {row["model"] for row in rows}
+    return [name for name in models.MODEL_NAMES if name in found]

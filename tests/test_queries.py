@@ -1,5 +1,6 @@
 """Tests de src/queries.py (lectura para la interfaz)."""
 
+import logging
 from pathlib import Path
 
 import pandas as pd
@@ -357,3 +358,40 @@ def test_noise_summary_without_results_is_none() -> None:
     """Sin resultados no hay resumen."""
     empty = pd.DataFrame(columns=queries.RESULT_COLUMNS)
     assert queries.noise_summary(empty, []) is None
+
+
+def test_prediction_step_follows_the_saved_predictions(tmp_path: Path) -> None:
+    """El paso Predicción está pendiente hasta que se guarda una predicción.
+
+    Usa bases propias: no debe escribir en la corrida compartida de la sesión.
+    """
+    from src import predict
+
+    paths = {
+        "db_path": tmp_path / "structured.db",
+        "unstructured_path": tmp_path / "unstructured.db",
+    }
+    models_dir = tmp_path / "models"
+    root = logging.getLogger("src")
+    saved_handlers, saved_level = list(root.handlers), root.level
+    try:
+        run_id = pipeline.run_etl(db_path=paths["db_path"])
+        other_id = pipeline.run_etl(db_path=paths["db_path"])
+        pipeline.run_training(
+            run_id, models_dir=models_dir, scenarios=("A",), model_names=LR, **paths
+        )
+        assert queries.has_predictions(run_id, paths["unstructured_path"]) is False
+        assert queries.run_steps(run_id, **paths)["Predicción"] is False
+        predict.predict_next_month(run_id, 15.0, models_dir=models_dir, **paths)
+    finally:
+        root.handlers[:] = saved_handlers
+        root.setLevel(saved_level)
+    assert queries.has_predictions(run_id, paths["unstructured_path"]) is True
+    assert queries.run_steps(run_id, **paths) == {
+        "ETL": True,
+        "Entrenamiento": True,
+        "Predicción": True,
+        "Reporte": False,
+    }
+    # Otra corrida sin predicciones no se ve afectada.
+    assert queries.has_predictions(other_id, paths["unstructured_path"]) is False

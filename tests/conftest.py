@@ -5,7 +5,7 @@ from collections.abc import Iterator
 
 import pytest
 
-from src import logger, pipeline
+from src import config, logger, pipeline
 
 
 @pytest.fixture
@@ -45,3 +45,14 @@ def trained_run(tmp_path_factory: pytest.TempPathFactory) -> dict:
         root.setLevel(old_level)
         root.handlers[:] = old_handlers
     return {"run_id": run_id, "models_dir": base / "models", **paths}
+
+
+@pytest.fixture
+def use_trained(trained_run: dict, monkeypatch: pytest.MonkeyPatch) -> dict:
+    """Apunta la app a la corrida entrenada una sola vez para toda la sesión."""
+    monkeypatch.setattr(config, "STRUCTURED_DB_PATH", trained_run["db_path"])
+    monkeypatch.setattr(
+        config, "UNSTRUCTURED_DB_PATH", trained_run["unstructured_path"]
+    )
+    monkeypatch.setattr(config, "MODELS_DIR", trained_run["models_dir"])
+    return trained_run

@@ -62,6 +62,15 @@ CREATE TABLE IF NOT EXISTS configuracion (
     created_at TEXT NOT NULL,
     doc        TEXT NOT NULL CHECK (json_valid(doc))
 );
+
+CREATE TABLE IF NOT EXISTS predicciones (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id     TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    doc        TEXT NOT NULL CHECK (json_valid(doc))
+);
+
+CREATE INDEX IF NOT EXISTS idx_predicciones_run_id ON predicciones (run_id);
 """
 
 
@@ -167,10 +176,12 @@ def get_run(run_id: str, db_path: Path | None = None) -> sqlite3.Row | None:
 
 
 def init_unstructured_db(db_path: Path | None = None) -> None:
-    """Crea las tablas ``resultados_modelos`` y ``configuracion`` si no existen.
+    """Crea ``resultados_modelos``, ``configuracion`` y ``predicciones`` si faltan.
 
-    Ambas guardan un documento JSON por fila (``doc``), que se consulta con
-    ``json_extract``. El ``run_id`` las conecta con ``structured.db``.
+    Las tres guardan un documento JSON por fila (``doc``), que se consulta con
+    ``json_extract``. El ``run_id`` las conecta con ``structured.db``. Es
+    seguro llamarla sobre una base vieja: agrega las tablas que falten sin
+    tocar los datos.
 
     Args:
         db_path: ruta de la base; por defecto ``unstructured.db``.

@@ -4,6 +4,7 @@ La app consulta siempre estas funciones y no guarda nada en la memoria de
 Streamlit, así los resultados siguen ahí al cerrar y reabrir la app.
 """
 
+import json
 from pathlib import Path
 
 import pandas as pd
@@ -53,9 +54,9 @@ def run_steps(
 ) -> dict[str, bool]:
     """Indica qué pasos de una corrida están hechos.
 
-    El ETL se deduce de sus eventos en ``logs`` y el entrenamiento de los
-    resultados guardados. Predicción y reporte quedan pendientes hasta que
-    existan esas etapas.
+    El ETL se deduce de sus eventos en ``logs``, el entrenamiento de los
+    resultados guardados y la predicción de la colección ``predicciones``.
+    El reporte queda pendiente hasta que exista esa etapa.
 
     Args:
         run_id: identificador de la corrida.
@@ -75,9 +76,26 @@ def run_steps(
     return {
         STEP_ETL: not etl.empty,
         STEP_TRAINING: results.has_results(run_id, unstructured_path),
-        STEP_PREDICTION: False,
+        STEP_PREDICTION: has_predictions(run_id, unstructured_path),
         STEP_REPORT: False,
     }
+
+
+def has_predictions(run_id: str, unstructured_path: Path | None = None) -> bool:
+    """Indica si una corrida tiene al menos una predicción guardada.
+
+    Args:
+        run_id: identificador de la corrida.
+        unstructured_path: ruta de ``unstructured.db``; por defecto la de
+            ``config``.
+    """
+    path = unstructured_path or config.UNSTRUCTURED_DB_PATH
+    db.init_unstructured_db(path)
+    with db.get_connection(path) as conn:
+        row = conn.execute(
+            "SELECT 1 FROM predicciones WHERE run_id = ? LIMIT 1", (run_id,)
+        ).fetchone()
+    return row is not None
 
 
 def run_summary(
@@ -396,3 +414,59 @@ def noise_summary(
         "max_cv_std": float(table["cv_std"].max()),
         "always_high_f1": float(table["f1_siempre_alta"].iloc[0]),
     }
+
+
+PREDICTION_COLUMNS = ["id", "run_id", "created_at", "fecha", "temperatura"]
+
+
+def prediction_history(
+    run_id: str | None = None, unstructured_path: Path | None = None
+) -> pd.DataFrame:
+    """Lista las predicciones guardadas, la más reciente primero.
+
+    Args:
+        run_id: si se indica, solo las de esa corrida.
+        unstructured_path: ruta de ``unstructured.db``; por defecto la de
+            ``config``.
+
+    Returns:
+        DataFrame con ``PREDICTION_COLUMNS`` y, por cada modelo, las columnas
+        ``p_<modelo>`` (probabilidad de demanda alta) y ``clase_<modelo>``.
+    """
+    path = unstructured_path or config.UNSTRUCTURED_DB_PATH
+    db.init_unstructured_db(path)
+    per_model = [
+        f"json_extract(doc, '$.modelos.{name}.probabilidad'), "
+        f"json_extract(doc, '$.modelos.{name}.clase')"
+        for name in models.MODEL_NAMES
+    ]
+    columns = PREDICTION_COLUMNS + [
+        column
+        for name in models.MODEL_NAMES
+        for column in (f"p_{name}", f"clase_{name}")
+    ]
+    where, params = ("WHERE run_id = ?", (run_id,)) if run_id else ("", ())
+    with db.get_connection(path) as conn:
+        rows = conn.execute(
+            "SELECT id, run_id, created_at, json_extract(doc, '$.fecha'), "
+            f"json_extract(doc, '$.temperatura'), {', '.join(per_model)} "
+            f"FROM predicciones {where} ORDER BY id DESC",
+            params,
+        ).fetchall()
+    return pd.DataFrame([tuple(r) for r in rows], columns=columns)
+
+
+def latest_prediction(
+    run_id: str, unstructured_path: Path | None = None
+) -> dict[str, object] | None:
+    """Devuelve el documento de la última predicción de una corrida, o ``None``."""
+    path = unstructured_path or config.UNSTRUCTURED_DB_PATH
+    db.init_unstructured_db(path)
+    with db.get_connection(path) as conn:
+        row = conn.execute(
+            "SELECT id, doc FROM predicciones WHERE run_id = ? ORDER BY id DESC LIMIT 1",
+            (run_id,),
+        ).fetchone()
+    if row is None:
+        return None
+    return {**json.loads(row["doc"]), "id": row["id"]}

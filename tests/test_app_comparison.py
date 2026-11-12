@@ -11,17 +11,6 @@ from src import config, queries, results
 APP_PATH = config.ROOT_DIR / "app.py"
 
 
-@pytest.fixture
-def use_trained(trained_run: dict, monkeypatch: pytest.MonkeyPatch) -> dict:
-    """Apunta la app a la corrida entrenada una sola vez para toda la sesión."""
-    monkeypatch.setattr(config, "STRUCTURED_DB_PATH", trained_run["db_path"])
-    monkeypatch.setattr(
-        config, "UNSTRUCTURED_DB_PATH", trained_run["unstructured_path"]
-    )
-    monkeypatch.setattr(config, "MODELS_DIR", trained_run["models_dir"])
-    return trained_run
-
-
 def open_page() -> AppTest:
     """Abre la página Comparación."""
     at = AppTest.from_file(str(APP_PATH), default_timeout=120).run()
