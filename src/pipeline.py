@@ -4,7 +4,7 @@ import logging
 from collections.abc import Callable
 from pathlib import Path
 
-from src import data, db, features, logger, results, train
+from src import config, data, db, features, logger, results, train
 
 log = logging.getLogger(__name__)
 
@@ -24,10 +24,12 @@ def run_etl_steps(csv_path: Path | None, db_path: Path | None) -> int:
 
 
 @logger.log_step
-def run_training_steps(db_path: Path | None) -> list[train.ModelRun]:
+def run_training_steps(
+    db_path: Path | None, seed: int = config.SEED
+) -> list[train.ModelRun]:
     """Entrena los 3 modelos en los escenarios A y B desde ``datos_limpios``."""
     dataset = features.build_dataset(data.load_clean_data(db_path))
-    return train.train_all(dataset)
+    return train.train_all(dataset, seed=seed)
 
 
 @logger.log_step
@@ -37,16 +39,19 @@ def run_saving_steps(
     csv_path: Path | None,
     unstructured_path: Path | None,
     models_dir: Path | None,
+    seed: int = config.SEED,
 ) -> None:
     """Guarda la configuración y cada resultado (con su modelo) de la corrida."""
     results.save_run_config(
-        run_id, results.build_run_config(csv_path), unstructured_path
+        run_id, results.build_run_config(csv_path, seed), unstructured_path
     )
     for run in runs:
         results.save_model_run(run_id, run, models_dir, unstructured_path)
 
 
-def _run_registered(steps: Callable[[], object], db_path: Path | None) -> str:
+def _run_registered(
+    steps: Callable[[], object], db_path: Path | None, seed: int = config.SEED
+) -> str:
     """Ejecuta ``steps`` como una corrida registrada en ``runs`` y ``logs``.
 
     Crea el ``run_id``, lo deja activo para el logger y cierra la corrida con
@@ -54,7 +59,7 @@ def _run_registered(steps: Callable[[], object], db_path: Path | None) -> str:
     """
     logger.setup_logging(db_path)
     db.init_structured_db(db_path)
-    run_id = db.create_run(db_path=db_path)
+    run_id = db.create_run(seed=seed, db_path=db_path)
     token = logger.current_run_id.set(run_id)
     try:
         steps()
@@ -68,17 +73,22 @@ def _run_registered(steps: Callable[[], object], db_path: Path | None) -> str:
     return run_id
 
 
-def run_etl(csv_path: Path | None = None, db_path: Path | None = None) -> str:
+def run_etl(
+    csv_path: Path | None = None,
+    db_path: Path | None = None,
+    seed: int = config.SEED,
+) -> str:
     """Ejecuta solo el ETL como una corrida registrada.
 
     Args:
         csv_path: CSV de entrada; por defecto el de ``data/raw/``.
         db_path: ruta de ``structured.db``; por defecto la de ``config``.
+        seed: semilla de la corrida; por defecto ``config.SEED``.
 
     Returns:
         El ``run_id`` de la corrida.
     """
-    return _run_registered(lambda: run_etl_steps(csv_path, db_path), db_path)
+    return _run_registered(lambda: run_etl_steps(csv_path, db_path), db_path, seed)
 
 
 def run_pipeline(
@@ -86,6 +96,7 @@ def run_pipeline(
     db_path: Path | None = None,
     unstructured_path: Path | None = None,
     models_dir: Path | None = None,
+    seed: int = config.SEED,
 ) -> str:
     """Ejecuta ETL, entrenamiento y guardado en una misma corrida registrada.
 
@@ -98,6 +109,7 @@ def run_pipeline(
         unstructured_path: ruta de ``unstructured.db``; por defecto la de
             ``config``.
         models_dir: carpeta de los ``.joblib``; por defecto ``config.MODELS_DIR``.
+        seed: semilla de la corrida; por defecto ``config.SEED``.
 
     Returns:
         El ``run_id`` de la corrida.
@@ -105,11 +117,11 @@ def run_pipeline(
 
     def steps() -> None:
         run_etl_steps(csv_path, db_path)
-        runs = run_training_steps(db_path)
+        runs = run_training_steps(db_path, seed)
         run_id = logger.current_run_id.get()
-        run_saving_steps(run_id, runs, csv_path, unstructured_path, models_dir)
+        run_saving_steps(run_id, runs, csv_path, unstructured_path, models_dir, seed)
 
-    return _run_registered(steps, db_path)
+    return _run_registered(steps, db_path, seed)
 
 
 def main() -> None:

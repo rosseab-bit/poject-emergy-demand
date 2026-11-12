@@ -52,17 +52,17 @@ def positive_weight(y_train: pd.Series) -> float:
     return (len(y_train) - positives) / positives
 
 
-def _make_classifier(name: str, y_train: pd.Series | None):
-    """Crea el clasificador, con la semilla de ``config`` y desbalance tratado."""
+def _make_classifier(name: str, y_train: pd.Series | None, seed: int):
+    """Crea el clasificador, con la semilla dada y el desbalance tratado."""
     if name == LOGISTIC_REGRESSION:
         return LogisticRegression(
-            class_weight="balanced", max_iter=1000, random_state=config.SEED
+            class_weight="balanced", max_iter=1000, random_state=seed
         )
     if name == RANDOM_FOREST:
         return RandomForestClassifier(
             n_estimators=300,
             class_weight="balanced",
-            random_state=config.SEED,
+            random_state=seed,
             n_jobs=1,
         )
     if name == XGBOOST:
@@ -71,13 +71,15 @@ def _make_classifier(name: str, y_train: pd.Series | None):
         return XGBClassifier(
             scale_pos_weight=positive_weight(y_train),
             eval_metric="logloss",
-            random_state=config.SEED,
+            random_state=seed,
             n_jobs=1,
         )
     raise ValueError(f"Modelo inválido: {name!r}; usar uno de {MODEL_NAMES}")
 
 
-def build_pipeline(name: str, y_train: pd.Series | None = None) -> Pipeline:
+def build_pipeline(
+    name: str, y_train: pd.Series | None = None, seed: int = config.SEED
+) -> Pipeline:
     """Arma el ``Pipeline`` (imputación, escalado, clasificador) de un modelo.
 
     El desbalance se trata con ``class_weight='balanced'`` (regresión
@@ -87,6 +89,7 @@ def build_pipeline(name: str, y_train: pd.Series | None = None) -> Pipeline:
     Args:
         name: uno de ``MODEL_NAMES``.
         y_train: target de entrenamiento; obligatorio para XGBoost.
+        seed: semilla del modelo; por defecto ``config.SEED``.
 
     Returns:
         Pipeline con los pasos ``imputer``, ``scaler`` y ``clf``.
@@ -98,7 +101,7 @@ def build_pipeline(name: str, y_train: pd.Series | None = None) -> Pipeline:
         [
             ("imputer", SimpleImputer(strategy="median")),
             ("scaler", StandardScaler()),
-            ("clf", _make_classifier(name, y_train)),
+            ("clf", _make_classifier(name, y_train, seed)),
         ]
     )
 

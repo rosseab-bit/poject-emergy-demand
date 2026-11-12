@@ -101,11 +101,14 @@ def git_info(repo_dir: Path | None = None) -> dict[str, str | bool | None]:
 
 
 @log_step
-def reproducibility_info(csv_path: Path | None = None) -> dict[str, object]:
+def reproducibility_info(
+    csv_path: Path | None = None, seed: int = config.SEED
+) -> dict[str, object]:
     """Reúne lo necesario para repetir una corrida.
 
     Args:
         csv_path: CSV original; por defecto ``config.RAW_CSV_PATH``.
+        seed: semilla de la corrida; por defecto ``config.SEED``.
 
     Returns:
         Diccionario con ``seed``, ``dataset_sha256``, ``versions``,
@@ -114,7 +117,7 @@ def reproducibility_info(csv_path: Path | None = None) -> dict[str, object]:
     path = csv_path if csv_path is not None else config.RAW_CSV_PATH
     git = git_info()
     info = {
-        "seed": config.SEED,
+        "seed": seed,
         "dataset_sha256": file_sha256(path),
         "versions": library_versions(),
         "git_commit": git["commit"],
@@ -141,11 +144,14 @@ def to_json(doc: dict) -> str:
     return json.dumps(doc, ensure_ascii=False, default=_json_default)
 
 
-def build_run_config(csv_path: Path | None = None) -> dict[str, object]:
+def build_run_config(
+    csv_path: Path | None = None, seed: int = config.SEED
+) -> dict[str, object]:
     """Arma el documento de configuración de una corrida (Tabla 3).
 
     Args:
         csv_path: CSV original; por defecto ``config.RAW_CSV_PATH``.
+        seed: semilla de la corrida; por defecto ``config.SEED``.
 
     Returns:
         Reproducibilidad (semilla, hash, versiones, commit) más los parámetros
@@ -153,7 +159,7 @@ def build_run_config(csv_path: Path | None = None) -> dict[str, object]:
         de cada escenario y grillas de hiperparámetros.
     """
     return {
-        **reproducibility_info(csv_path),
+        **reproducibility_info(csv_path, seed),
         "holdout_months": config.HOLDOUT_MONTHS,
         "cv_splits": config.CV_SPLITS,
         "target": {

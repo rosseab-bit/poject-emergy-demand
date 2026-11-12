@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from src import data, db, pipeline, results
+from src import config, data, db, pipeline, results
 
 
 @pytest.mark.usefixtures("clean_root_logger")
@@ -113,3 +113,13 @@ def test_run_pipeline_trains_saves_and_links_everything(tmp_path: Path) -> None:
     for scenario, model in expected:
         doc = results.load_result(run_id, scenario, model, udb_path)
         assert results.load_model(doc, models_dir) is not None
+
+
+@pytest.mark.usefixtures("clean_root_logger")
+def test_run_etl_records_the_given_seed(tmp_path: Path) -> None:
+    """La semilla elegida queda en la tabla runs."""
+    db_path = tmp_path / "structured.db"
+    run_id = pipeline.run_etl(db_path=db_path, seed=7)
+    assert db.get_run(run_id, db_path)["seed"] == 7
+    other = pipeline.run_etl(db_path=db_path)
+    assert db.get_run(other, db_path)["seed"] == config.SEED

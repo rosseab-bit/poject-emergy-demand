@@ -271,3 +271,28 @@ def test_train_model_keeps_holdout_dates_and_true_values() -> None:
     assert sum(run.y_test) == 12
     cm = run.test.confusion_matrix
     assert cm[1][0] + cm[1][1] == sum(run.y_test)
+
+
+def test_seed_is_passed_to_search_and_baselines() -> None:
+    """La semilla llega al modelo ajustado y al sorteo de la referencia."""
+    ds = real_dataset()
+    x, y = features.get_model_data(ds, "A")
+    x_tr, x_te, y_tr, y_te = train.split_holdout(x, y)
+    res = train.search_hyperparameters(models.RANDOM_FOREST, x_tr, y_tr, seed=7)
+    assert res.estimator.named_steps["clf"].random_state == 7
+    one = train.evaluate_baselines(x_tr, y_tr, x_te, y_te, seed=1)
+    two = train.evaluate_baselines(x_tr, y_tr, x_te, y_te, seed=2)
+    assert one[train.BASELINE_RANDOM].y_pred != two[train.BASELINE_RANDOM].y_pred
+    assert (
+        one[train.BASELINE_ALWAYS_HIGH].y_pred == two[train.BASELINE_ALWAYS_HIGH].y_pred
+    )
+
+
+def test_train_model_with_other_seed_is_reproducible_and_differs() -> None:
+    """Misma semilla repite resultados; otra semilla cambia las probabilidades."""
+    ds = real_dataset()
+    a = train.train_model(ds, models.RANDOM_FOREST, "A", seed=7)
+    b = train.train_model(ds, models.RANDOM_FOREST, "A", seed=7)
+    c = train.train_model(ds, models.RANDOM_FOREST, "A", seed=8)
+    assert a.test.proba == b.test.proba
+    assert a.test.proba != c.test.proba

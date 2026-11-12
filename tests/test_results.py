@@ -313,3 +313,9 @@ def test_cross_query_with_attach_database(
     assert row["model"] == "logistic_regression"
     assert 0.0 <= row["f1"] <= 1.0
     assert row["n_logs"] == 1
+
+
+def test_build_run_config_uses_the_given_seed() -> None:
+    """La configuración guarda la semilla recibida; por defecto, la de config."""
+    assert results.build_run_config(seed=7)["seed"] == 7
+    assert results.build_run_config()["seed"] == config.SEED
