@@ -73,3 +73,49 @@ def test_load_raw_invalid_dates(tmp_path: Path, dates: list[str], message: str) 
     path = write_csv(tmp_path / "c.csv", make_rows(dates))
     with pytest.raises(ValueError, match=message):
         data.load_raw(path)
+
+
+def make_power_frame(values: list[float | None]) -> pd.DataFrame:
+    """DataFrame mínimo con fecha y potencia máxima."""
+    dates = pd.date_range("2020-01-01", periods=len(values), freq="MS")
+    return pd.DataFrame({data.DATE_COLUMN: dates, "potencia_maxima": values})
+
+
+def test_flag_repeated_power_nulls_the_repeat() -> None:
+    """El valor igual al del mes anterior queda nulo y marcado."""
+    df = make_power_frame([100.0, 110.0, 110.0, 120.0])
+    out = data.flag_repeated_power(df)
+    assert out["potencia_repetida"].tolist() == [0, 0, 1, 0]
+    assert out["potencia_maxima"].isna().tolist() == [False, False, True, False]
+    assert out["potencia_maxima"].iloc[1] == 110.0
+
+
+def test_flag_repeated_power_does_not_mutate_input() -> None:
+    """La función devuelve una copia."""
+    df = make_power_frame([100.0, 100.0])
+    data.flag_repeated_power(df)
+    assert df["potencia_maxima"].tolist() == [100.0, 100.0]
+    assert "potencia_repetida" not in df.columns
+
+
+def test_flag_repeated_power_without_repeats() -> None:
+    """Sin repetidos no cambia nada."""
+    df = make_power_frame([100.0, 101.0, 102.0])
+    out = data.flag_repeated_power(df)
+    assert out["potencia_repetida"].sum() == 0
+    assert out["potencia_maxima"].notna().all()
+
+
+def test_flag_repeated_power_ignores_existing_nulls() -> None:
+    """Dos nulos seguidos no cuentan como repetición."""
+    df = make_power_frame([100.0, None, None, 120.0])
+    out = data.flag_repeated_power(df)
+    assert out["potencia_repetida"].sum() == 0
+
+
+def test_flag_repeated_power_real_csv() -> None:
+    """En el CSV real se detectan exactamente 2002-03 y 2021-08."""
+    out = data.flag_repeated_power(data.load_raw())
+    flagged = out.loc[out["potencia_repetida"] == 1, data.DATE_COLUMN]
+    assert flagged.dt.strftime("%Y-%m").tolist() == ["2002-03", "2021-08"]
+    assert out["potencia_maxima"].isna().sum() == 2

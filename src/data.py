@@ -79,3 +79,31 @@ def load_raw(path: Path | None = None) -> pd.DataFrame:
         df[DATE_COLUMN].iloc[-1].strftime("%Y-%m"),
     )
     return df
+
+
+@log_step
+def flag_repeated_power(df: pd.DataFrame) -> pd.DataFrame:
+    """Marca y anula los valores de potencia máxima repetidos del mes anterior.
+
+    Un valor idéntico al del mes anterior se toma como error de carga: se
+    pone en nulo (lo imputa después el ``Pipeline``, solo con datos de
+    entrenamiento) y se deja la marca ``potencia_repetida`` (0 o 1).
+
+    Args:
+        df: datos con ``potencia_maxima``, ordenados por fecha.
+
+    Returns:
+        Copia de ``df`` con la columna ``potencia_repetida`` agregada.
+    """
+    out = df.copy()
+    power = out["potencia_maxima"]
+    repeated = power.notna() & power.eq(power.shift())
+    out["potencia_repetida"] = repeated.astype(int)
+    out.loc[repeated, "potencia_maxima"] = pd.NA
+    for date in out.loc[repeated, DATE_COLUMN]:
+        logger.warning(
+            "Potencia máxima repetida del mes anterior en %s: se pone en nulo",
+            date.strftime("%Y-%m"),
+        )
+    logger.info("Valores de potencia máxima repetidos: %d", int(repeated.sum()))
+    return out
