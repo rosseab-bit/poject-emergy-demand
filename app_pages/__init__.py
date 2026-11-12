@@ -4,6 +4,7 @@ from collections.abc import Callable
 
 import streamlit as st
 
+from app_pages import datos
 from app_pages.sidebar import PAGE_NAMES
 
 
@@ -18,7 +19,7 @@ def _placeholder(name: str, detail: str) -> Callable[[], None]:
 
 
 PAGES: dict[str, Callable[[], None]] = {
-    "Datos": _placeholder("Datos", "Página en construcción."),
+    "Datos": datos.render,
     "Entrenamiento": _placeholder("Entrenamiento", "Página en construcción."),
     "Comparación": _placeholder("Comparación", "Página en construcción."),
     "Predicción": _placeholder("Predicción", "Disponible en una etapa posterior."),

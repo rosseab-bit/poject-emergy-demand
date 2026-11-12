@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from src import config, db, models, results
+from src import config, data, db, features, models, results
 
 STEP_ETL = "ETL"
 STEP_TRAINING = "Entrenamiento"
@@ -243,3 +243,74 @@ def list_log_modules(
     """
     logs = get_logs(run_id, db_path=db_path)
     return sorted(logs["module"].unique().tolist())
+
+
+def data_overview(db_path: Path | None = None) -> dict[str, object] | None:
+    """Resume la tabla ``datos_limpios`` y el target para la página Datos.
+
+    Args:
+        db_path: ruta de ``structured.db``; por defecto la de ``config``.
+
+    Returns:
+        ``None`` si el ETL todavía no guardó datos. Si no, un diccionario con
+        ``rows``, ``rows_complete``, ``rows_sector_nulls``, ``repeated_months``,
+        ``first_month``, ``last_month`` y ``target`` (filas con target,
+        positivos, negativos, proporción y primer mes con target).
+    """
+    db.init_structured_db(db_path)
+    clean = data.load_clean_data(db_path)
+    if clean.empty:
+        return None
+    dataset = features.build_dataset(clean)
+    _, y = features.get_model_data(dataset, "A")
+    labeled = dataset.dropna(subset=[features.TARGET_COLUMN])
+    balance = features.class_balance(y)
+    month = clean[data.DATE_COLUMN].dt.strftime("%Y-%m")
+    return {
+        "rows": len(clean),
+        "rows_complete": data.count_complete_rows(clean),
+        "rows_sector_nulls": int(clean[data.SECTOR_COLUMNS].isna().any(axis=1).sum()),
+        "repeated_months": month[clean["potencia_repetida"] == 1].tolist(),
+        "first_month": month.iloc[0],
+        "last_month": month.iloc[-1],
+        "target": {
+            **balance,
+            "first_month": labeled[data.DATE_COLUMN].iloc[0].strftime("%Y-%m"),
+        },
+    }
+
+
+def add_demand_index(df: pd.DataFrame) -> pd.DataFrame:
+    """Agrega ``indice_demanda``: demanda del mes sobre el promedio de su año.
+
+    Quita la tendencia de crecimiento para que se vea la estacionalidad. Solo
+    se calcula en años con los 12 meses; en el resto queda en nulo.
+
+    Args:
+        df: datos con ``fecha`` y ``demanda_total``.
+
+    Returns:
+        Copia de ``df`` con la columna ``indice_demanda`` (1,0 = promedio del
+        año).
+    """
+    out = df.copy()
+    year = out[data.DATE_COLUMN].dt.year
+    months = out.groupby(year)[data.DATE_COLUMN].transform("count")
+    mean = out.groupby(year)["demanda_total"].transform("mean")
+    out["indice_demanda"] = (out["demanda_total"] / mean).where(months == 12)
+    return out
+
+
+def seasonality_by_month(df: pd.DataFrame) -> pd.DataFrame:
+    """Promedio del ``indice_demanda`` por mes calendario (1 a 12).
+
+    Args:
+        df: datos con ``fecha`` y ``demanda_total``.
+
+    Returns:
+        DataFrame indexado por mes con la columna ``indice_medio``.
+    """
+    indexed = add_demand_index(df)
+    month = indexed[data.DATE_COLUMN].dt.month
+    mean = indexed.groupby(month)["indice_demanda"].mean()
+    return mean.rename("indice_medio").to_frame().rename_axis("mes")

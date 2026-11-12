@@ -2,9 +2,10 @@
 
 from pathlib import Path
 
+import pandas as pd
 import pytest
 
-from src import config, db, pipeline, queries, results
+from src import config, data, db, pipeline, queries, results
 
 LR = ("logistic_regression",)
 
@@ -202,3 +203,58 @@ def test_filters_use_parameters_not_string_building(paths: dict) -> None:
     hostile = "x') OR ('1'='1"
     assert queries.get_logs(levels=[hostile], db_path=paths["db_path"]).empty
     assert queries.get_logs(hostile, db_path=paths["db_path"]).empty
+
+
+@pytest.fixture(scope="module")
+def etl_db(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """Base con el ETL ya ejecutado (solo datos limpios)."""
+    path = tmp_path_factory.mktemp("overview") / "structured.db"
+    data.save_clean_data(data.flag_repeated_power(data.load_raw()), path)
+    return path
+
+
+def test_data_overview_before_etl_is_none(paths: dict) -> None:
+    """Sin ETL no hay resumen."""
+    assert queries.data_overview(paths["db_path"]) is None
+
+
+def test_data_overview_real_numbers(etl_db: Path) -> None:
+    """Con el CSV real: 308 meses, 259 completos, 48 con sectores nulos."""
+    overview = queries.data_overview(etl_db)
+    assert overview["rows"] == 308
+    assert overview["rows_complete"] == 259
+    assert overview["rows_sector_nulls"] == 48
+    assert overview["repeated_months"] == ["2002-03", "2021-08"]
+    assert (overview["first_month"], overview["last_month"]) == ("2001-01", "2026-08")
+    target = overview["target"]
+    assert (target["total"], target["positivos"], target["negativos"]) == (236, 60, 176)
+    assert target["first_month"] == "2007-01"
+    assert target["proporcion_positivos"] == pytest.approx(60 / 236)
+
+
+def test_demand_index_only_for_complete_years() -> None:
+    """El índice vale 1 en promedio por año y es nulo en años incompletos."""
+    dates = pd.date_range("2020-01-01", periods=14, freq="MS")
+    df = pd.DataFrame({"fecha": dates, "demanda_total": [100.0] * 12 + [200.0, 300.0]})
+    out = queries.add_demand_index(df)
+    assert out["indice_demanda"].iloc[:12].tolist() == [1.0] * 12
+    assert out["indice_demanda"].iloc[12:].isna().all()
+
+
+def test_demand_index_removes_the_trend() -> None:
+    """Con crecimiento fuerte entre años, cada año se normaliza por su promedio."""
+    dates = pd.date_range("2020-01-01", periods=24, freq="MS")
+    base = [90.0, 110.0] * 6
+    df = pd.DataFrame({"fecha": dates, "demanda_total": base + [v * 2 for v in base]})
+    out = queries.add_demand_index(df)
+    assert out["indice_demanda"].iloc[:12].tolist() == pytest.approx(
+        out["indice_demanda"].iloc[12:].tolist()
+    )
+
+
+def test_seasonality_by_month_has_twelve_months(etl_db: Path) -> None:
+    """La estacionalidad real tiene 12 meses y promedia cerca de 1."""
+    season = queries.seasonality_by_month(data.load_clean_data(etl_db))
+    assert season.index.tolist() == list(range(1, 13))
+    assert season["indice_medio"].mean() == pytest.approx(1.0, abs=0.02)
+    assert season["indice_medio"].notna().all()
