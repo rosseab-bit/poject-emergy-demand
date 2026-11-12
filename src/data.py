@@ -107,3 +107,46 @@ def flag_repeated_power(df: pd.DataFrame) -> pd.DataFrame:
         )
     logger.info("Valores de potencia máxima repetidos: %d", int(repeated.sum()))
     return out
+
+
+SECTOR_START = pd.Timestamp("2005-01-01")
+
+
+@log_step
+def check_sector_nulls(df: pd.DataFrame) -> int:
+    """Verifica que los nulos de los sectores sean solo anteriores a 2005.
+
+    Los sectores (residencial, comercio e industria, grandes usuarios) no
+    existen en la fuente antes de 2005-01. No se imputan: esos meses quedan
+    con nulos y se usan solo por su ``demanda_total`` como historia.
+
+    Args:
+        df: datos con ``fecha`` y las columnas de ``SECTOR_COLUMNS``.
+
+    Returns:
+        Cantidad de filas con algún sector nulo.
+
+    Raises:
+        ValueError: si hay sectores nulos desde 2005-01 en adelante.
+    """
+    null_rows = df[SECTOR_COLUMNS].isna().any(axis=1)
+    unexpected = null_rows & (df[DATE_COLUMN] >= SECTOR_START)
+    if unexpected.any():
+        months = df.loc[unexpected, DATE_COLUMN].dt.strftime("%Y-%m").tolist()
+        raise ValueError(f"Sectores nulos desde 2005-01: {months}")
+    logger.info(
+        "Filas con sectores nulos (anteriores a 2005): %d", int(null_rows.sum())
+    )
+    return int(null_rows.sum())
+
+
+def count_complete_rows(df: pd.DataFrame) -> int:
+    """Cuenta las filas sin ningún nulo en las columnas de valores.
+
+    Args:
+        df: datos con ``VALUE_COLUMNS``.
+
+    Returns:
+        Cantidad de filas completas.
+    """
+    return int(df[VALUE_COLUMNS].notna().all(axis=1).sum())

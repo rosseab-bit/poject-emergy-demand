@@ -119,3 +119,45 @@ def test_flag_repeated_power_real_csv() -> None:
     flagged = out.loc[out["potencia_repetida"] == 1, data.DATE_COLUMN]
     assert flagged.dt.strftime("%Y-%m").tolist() == ["2002-03", "2021-08"]
     assert out["potencia_maxima"].isna().sum() == 2
+
+
+def make_sector_frame(dates: list[str], null_dates: list[str]) -> pd.DataFrame:
+    """DataFrame con sectores completos salvo en las fechas indicadas."""
+    df = pd.DataFrame({data.DATE_COLUMN: pd.to_datetime(dates)})
+    for col in data.SECTOR_COLUMNS:
+        df[col] = 1.0
+    df.loc[
+        df[data.DATE_COLUMN].isin(pd.to_datetime(null_dates)), data.SECTOR_COLUMNS
+    ] = None
+    return df
+
+
+def test_check_sector_nulls_accepts_pre_2005() -> None:
+    """Nulos antes de 2005 son esperados y se cuentan."""
+    df = make_sector_frame(
+        ["2004-11-01", "2004-12-01", "2005-01-01"], ["2004-11-01", "2004-12-01"]
+    )
+    assert data.check_sector_nulls(df) == 2
+
+
+def test_check_sector_nulls_rejects_unexpected() -> None:
+    """Un nulo desde 2005 en adelante lanza ValueError."""
+    df = make_sector_frame(["2004-12-01", "2005-01-01"], ["2005-01-01"])
+    with pytest.raises(ValueError, match="2005-01"):
+        data.check_sector_nulls(df)
+
+
+def test_count_complete_rows() -> None:
+    """Cuenta solo las filas sin ningún nulo."""
+    df = pd.DataFrame({c: [1.0, 2.0, 3.0] for c in data.VALUE_COLUMNS})
+    df.loc[1, "temperatura_promedio"] = None
+    assert data.count_complete_rows(df) == 2
+
+
+def test_real_csv_null_summary() -> None:
+    """En el CSV real: 48 filas con sectores nulos y 260 completas."""
+    df = data.load_raw()
+    assert data.check_sector_nulls(df) == 48
+    assert data.count_complete_rows(df) == 260
+    cleaned = data.flag_repeated_power(df)
+    assert data.count_complete_rows(cleaned) == 259
