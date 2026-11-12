@@ -33,6 +33,17 @@ CREATE TABLE IF NOT EXISTS logs (
 );
 
 CREATE INDEX IF NOT EXISTS idx_logs_run_id ON logs (run_id);
+
+CREATE TABLE IF NOT EXISTS datos_limpios (
+    fecha                TEXT PRIMARY KEY,
+    demanda_total        REAL NOT NULL,
+    demanda_residencial  REAL,
+    comercio_e_industria REAL,
+    grandes_usuarios     REAL,
+    temperatura_promedio REAL NOT NULL,
+    potencia_maxima      REAL,
+    potencia_repetida    INTEGER NOT NULL DEFAULT 0
+);
 """
 
 
@@ -64,7 +75,7 @@ def get_connection(db_path: Path | None = None) -> Iterator[sqlite3.Connection]:
 
 
 def init_structured_db(db_path: Path | None = None) -> None:
-    """Crea las tablas ``runs`` y ``logs`` si no existen.
+    """Crea las tablas ``runs``, ``logs`` y ``datos_limpios`` si no existen.
 
     Args:
         db_path: ruta de la base; por defecto ``structured.db``.

@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from src import config
+from src import config, db
 from src.logger import log_step
 
 logger = logging.getLogger(__name__)
@@ -150,3 +150,54 @@ def count_complete_rows(df: pd.DataFrame) -> int:
         Cantidad de filas completas.
     """
     return int(df[VALUE_COLUMNS].notna().all(axis=1).sum())
+
+
+CLEAN_COLUMNS = [DATE_COLUMN, *VALUE_COLUMNS, "potencia_repetida"]
+
+
+@log_step
+def save_clean_data(df: pd.DataFrame, db_path: Path | None = None) -> int:
+    """Guarda los datos limpios en la tabla ``datos_limpios`` (Tabla 1).
+
+    Reemplaza el contenido anterior en una sola transacción, así que correr
+    el ETL dos veces deja el mismo resultado.
+
+    Args:
+        df: datos limpios con ``CLEAN_COLUMNS``.
+        db_path: ruta de la base; por defecto ``structured.db``.
+
+    Returns:
+        Cantidad de filas guardadas.
+    """
+    db.init_structured_db(db_path)
+    out = df[CLEAN_COLUMNS].astype(object).where(df[CLEAN_COLUMNS].notna(), None)
+    out[DATE_COLUMN] = df[DATE_COLUMN].dt.strftime("%Y-%m-%d")
+    rows = [tuple(r) for r in out.itertuples(index=False)]
+    placeholders = ", ".join("?" * len(CLEAN_COLUMNS))
+    with db.get_connection(db_path) as conn:
+        conn.execute("DELETE FROM datos_limpios")
+        conn.executemany(
+            f"INSERT INTO datos_limpios ({', '.join(CLEAN_COLUMNS)}) "
+            f"VALUES ({placeholders})",
+            rows,
+        )
+    logger.info("Tabla datos_limpios guardada: %d filas", len(rows))
+    return len(rows)
+
+
+def load_clean_data(db_path: Path | None = None) -> pd.DataFrame:
+    """Lee la tabla ``datos_limpios`` ordenada por fecha.
+
+    Args:
+        db_path: ruta de la base; por defecto ``structured.db``.
+
+    Returns:
+        DataFrame con ``CLEAN_COLUMNS``; ``fecha`` como ``datetime64``.
+    """
+    with db.get_connection(db_path) as conn:
+        df = pd.read_sql_query(
+            f"SELECT {', '.join(CLEAN_COLUMNS)} FROM datos_limpios ORDER BY fecha",
+            conn,
+        )
+    df[DATE_COLUMN] = pd.to_datetime(df[DATE_COLUMN])
+    return df

@@ -161,3 +161,49 @@ def test_real_csv_null_summary() -> None:
     assert data.count_complete_rows(df) == 260
     cleaned = data.flag_repeated_power(df)
     assert data.count_complete_rows(cleaned) == 259
+
+
+def make_clean_frame() -> pd.DataFrame:
+    """DataFrame limpio mínimo, con nulos de sector y de potencia."""
+    df = pd.DataFrame(
+        {
+            data.DATE_COLUMN: pd.date_range("2004-12-01", periods=3, freq="MS"),
+            "demanda_total": [100.0, 110.0, 120.0],
+            "demanda_residencial": [None, 50.0, 55.0],
+            "comercio_e_industria": [None, 30.0, 35.0],
+            "grandes_usuarios": [None, 30.0, 30.0],
+            "temperatura_promedio": [20.0, 21.0, 22.0],
+            "potencia_maxima": [200.0, None, 220.0],
+            "potencia_repetida": [0, 1, 0],
+        }
+    )
+    return df
+
+
+def test_save_and_load_clean_data_roundtrip(tmp_path: Path) -> None:
+    """Lo guardado se lee igual, con los nulos preservados."""
+    db_path = tmp_path / "s.db"
+    df = make_clean_frame()
+    assert data.save_clean_data(df, db_path) == 3
+    back = data.load_clean_data(db_path)
+    pd.testing.assert_frame_equal(back, df, check_dtype=False)
+
+
+def test_save_clean_data_replaces_previous_content(tmp_path: Path) -> None:
+    """Guardar dos veces no duplica filas."""
+    db_path = tmp_path / "s.db"
+    df = make_clean_frame()
+    data.save_clean_data(df, db_path)
+    data.save_clean_data(df.iloc[:2], db_path)
+    assert len(data.load_clean_data(db_path)) == 2
+
+
+def test_real_csv_etl_to_table(tmp_path: Path) -> None:
+    """Con el CSV real la tabla tiene 308 filas, 259 completas."""
+    db_path = tmp_path / "s.db"
+    cleaned = data.flag_repeated_power(data.load_raw())
+    assert data.save_clean_data(cleaned, db_path) == 308
+    back = data.load_clean_data(db_path)
+    assert len(back) == 308
+    assert data.count_complete_rows(back) == 259
+    assert back["potencia_repetida"].sum() == 2
