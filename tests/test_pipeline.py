@@ -60,3 +60,24 @@ def test_run_etl_failure_is_logged_and_run_marked_error(tmp_path: Path) -> None:
         ).fetchall()
     assert run["status"] == "error"
     assert len(errors) >= 1
+
+
+@pytest.mark.usefixtures("clean_root_logger")
+def test_run_pipeline_trains_six_results_and_logs_them(tmp_path: Path) -> None:
+    """La corrida completa deja 6 resultados (3 modelos x 2 escenarios) en logs."""
+    db_path = tmp_path / "structured.db"
+    run_id = pipeline.run_pipeline(db_path=db_path)
+
+    assert db.get_run(run_id, db_path)["status"] == "ok"
+    with db.get_connection(db_path) as conn:
+        rows = conn.execute(
+            "SELECT level, message FROM logs WHERE run_id = ?", (run_id,)
+        ).fetchall()
+        orphans = conn.execute("SELECT COUNT(*) FROM logs WHERE run_id IS NULL")
+        assert orphans.fetchone()[0] == 0
+    results = [r["message"] for r in rows if r["message"].startswith("Resultado ")]
+    assert len(results) == 6
+    for scenario in ("A", "B"):
+        for model in ("logistic_regression", "random_forest", "xgboost"):
+            assert any(m.startswith(f"Resultado {scenario}/{model}:") for m in results)
+    assert not any(r["level"] == "ERROR" for r in rows)
