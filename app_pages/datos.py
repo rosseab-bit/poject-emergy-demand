@@ -36,6 +36,7 @@ def _run_etl_button() -> None:
     except Exception as error:  # noqa: BLE001 - se muestra el error en pantalla
         st.error(f"El ETL falló: {error}. El detalle está en la página Logs.")
         return
+    state.flash(f"ETL ejecutado: se creó la corrida {run_id}.")
     state.select_run(run_id)
 
 

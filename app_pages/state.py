@@ -10,6 +10,7 @@ RUN_KEY = "run_selector"
 PAGE_KEY = "page"
 SEED_KEY = "seed"
 PENDING_RUN_KEY = "_pending_run"
+FLASH_KEY = "_flash"
 
 
 def current_run_id() -> str | None:
@@ -37,3 +38,15 @@ def apply_pending_run() -> None:
     pending = st.session_state.pop(PENDING_RUN_KEY, None)
     if pending is not None:
         st.session_state[RUN_KEY] = pending
+
+
+def flash(message: str) -> None:
+    """Deja un aviso para mostrar en la próxima ejecución (sobrevive al rerun)."""
+    st.session_state[FLASH_KEY] = message
+
+
+def show_flash() -> None:
+    """Muestra el aviso pendiente, si lo hay, y lo borra."""
+    message = st.session_state.pop(FLASH_KEY, None)
+    if message:
+        st.success(message)

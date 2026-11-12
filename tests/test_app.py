@@ -6,7 +6,7 @@ import pytest
 from streamlit.testing.v1 import AppTest
 
 from app_pages.sidebar import PAGE_NAMES
-from src import config, db, pipeline
+from src import config, db, models, pipeline, queries, train
 
 APP_PATH = config.ROOT_DIR / "app.py"
 
@@ -185,3 +185,132 @@ def test_etl_failure_is_shown_not_raised(
     at.button[0].click().run()
     assert not at.exception
     assert any("csv ilegible" in e.value for e in at.error)
+
+
+LR = "logistic_regression"
+
+
+def select_models(at: AppTest, scenarios: list[str], model_names: list[str]) -> AppTest:
+    """Elige escenarios y modelos en la página Entrenamiento."""
+    at.multiselect[0].set_value(scenarios)
+    at.multiselect[1].set_value(model_names)
+    return at.run()
+
+
+def test_training_page_without_run_asks_for_etl(tmp_config: Path) -> None:
+    """Sin corrida pide ejecutar el ETL y no ofrece entrenar."""
+    at = go_to(run_app(), "Entrenamiento")
+    assert not at.exception
+    assert any("Primero ejecutá el ETL" in w.value for w in at.warning)
+    assert len(at.button) == 0
+
+
+def test_training_page_with_run_without_etl_asks_for_etl(tmp_config: Path) -> None:
+    """Una corrida sin ETL hecho tampoco permite entrenar."""
+    db.init_structured_db()
+    db.create_run()
+    at = go_to(run_app(), "Entrenamiento")
+    assert any("Primero ejecutá el ETL" in w.value for w in at.warning)
+    assert len(at.button) == 0
+
+
+@pytest.mark.usefixtures("clean_root_logger")
+def test_training_page_offers_all_options_after_etl(tmp_config: Path) -> None:
+    """Con el ETL hecho ofrece los 2 escenarios y los 3 modelos y la semilla."""
+    pipeline.run_etl(seed=5)
+    at = go_to(run_app(), "Entrenamiento")
+    assert not at.exception
+    assert at.multiselect[0].value == ["A", "B"]
+    assert at.multiselect[1].value == list(models.MODEL_NAMES)
+    assert at.button[0].label == "Entrenar"
+    assert at.button[0].disabled is False
+    assert any("Semilla de esta corrida: **5**" in c.value for c in at.caption)
+
+
+@pytest.mark.usefixtures("clean_root_logger")
+def test_train_button_is_disabled_without_selection(tmp_config: Path) -> None:
+    """Sin escenarios o sin modelos el botón queda deshabilitado."""
+    pipeline.run_etl()
+    at = go_to(run_app(), "Entrenamiento")
+    at = select_models(at, [], [LR])
+    assert at.button[0].disabled is True
+    at = select_models(at, ["A"], [])
+    assert at.button[0].disabled is True
+
+
+@pytest.mark.usefixtures("clean_root_logger")
+def test_training_button_trains_and_shows_saved_results(tmp_config: Path) -> None:
+    """Entrenar A con regresión logística guarda el resultado y lo muestra."""
+    run_id = pipeline.run_etl(seed=7)
+    at = go_to(run_app(), "Entrenamiento")
+    at = select_models(at, ["A"], [LR])
+    at.button[0].click().run()
+    assert not at.exception
+    assert any("Entrenamiento terminado" in s.value for s in at.success)
+
+    assert "✅ Entrenamiento — hecho" in sidebar_text(at)
+    assert queries.run_steps(run_id)["Entrenamiento"] is True
+    table = queries.results_table(run_id)
+    assert table[["scenario", "model"]].values.tolist() == [["A", LR]]
+
+    assert any("ya está entrenada" in i.value for i in at.info)
+    assert len(at.button) == 0
+    shown = at.dataframe[0].value
+    assert shown["Modelo"].tolist() == ["Regresión logística"]
+    assert shown["F1 hold-out"].iloc[0] == pytest.approx(table["f1"].iloc[0])
+    assert shown["F1 «siempre alta»"].iloc[0] == pytest.approx(0.4)
+
+
+@pytest.mark.usefixtures("clean_root_logger")
+def test_training_progress_and_choices_reach_the_pipeline(
+    tmp_config: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """La elección llega a run_training y se le pasa la función de progreso."""
+    run_id = pipeline.run_etl()
+    seen = {}
+
+    def fake_training(rid, scenarios, model_names, on_progress, **kwargs):
+        seen.update(rid=rid, scenarios=scenarios, models=model_names)
+        on_progress(1, 2, "A/random_forest")
+        on_progress(2, 2, "B/random_forest")
+        return rid
+
+    monkeypatch.setattr(pipeline, "run_training", fake_training)
+    at = go_to(run_app(), "Entrenamiento")
+    at = select_models(at, ["A", "B"], ["random_forest"])
+    at.button[0].click().run()
+    assert not at.exception
+    assert seen == {
+        "rid": run_id,
+        "scenarios": ("A", "B"),
+        "models": ("random_forest",),
+    }
+
+
+@pytest.mark.usefixtures("clean_root_logger")
+def test_training_failure_is_shown_and_logged(
+    tmp_config: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Si entrenar falla, se muestra el error y la corrida queda en error."""
+    run_id = pipeline.run_etl()
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("sin memoria")
+
+    monkeypatch.setattr(train, "train_all", boom)
+    at = go_to(run_app(), "Entrenamiento")
+    at = select_models(at, ["A"], [LR])
+    at.button[0].click().run()
+    assert not at.exception
+    assert any("sin memoria" in e.value for e in at.error)
+    assert db.get_run(run_id)["status"] == "error"
+
+
+@pytest.mark.usefixtures("clean_root_logger")
+def test_flash_after_etl_is_shown_once(tmp_config: Path) -> None:
+    """El aviso 'ETL ejecutado' aparece tras el botón y no se repite."""
+    at = go_to(run_app(), "Datos")
+    at.button[0].click().run()
+    assert any("ETL ejecutado" in s.value for s in at.success)
+    at.sidebar.radio[0].set_value("Logs").run()
+    assert len(at.success) == 0
