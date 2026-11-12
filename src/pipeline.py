@@ -3,19 +3,23 @@
 import logging
 from pathlib import Path
 
-from src import data, db, logger
+from src import data, db, features, logger
 
 log = logging.getLogger(__name__)
 
 
 @logger.log_step
 def run_etl_steps(csv_path: Path | None, db_path: Path | None) -> int:
-    """Carga, limpia y guarda los datos. Devuelve las filas guardadas."""
+    """Carga, limpia, guarda, deriva variables y target. Devuelve filas guardadas."""
     df = data.load_raw(csv_path)
     data.check_sector_nulls(df)
     cleaned = data.flag_repeated_power(df)
     log.info("Filas completas tras la limpieza: %d", data.count_complete_rows(cleaned))
-    return data.save_clean_data(cleaned, db_path)
+    rows = data.save_clean_data(cleaned, db_path)
+    dataset = features.build_dataset(data.load_clean_data(db_path))
+    _, y = features.get_model_data(dataset, "A")
+    features.log_class_balance(y)
+    return rows
 
 
 def run_etl(csv_path: Path | None = None, db_path: Path | None = None) -> str:
