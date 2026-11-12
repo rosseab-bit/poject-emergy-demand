@@ -194,3 +194,73 @@ def test_one_configuration_per_run(udb_path: Path) -> None:
         conn.execute("INSERT INTO configuracion VALUES ('r1', 'now', '{}')")
     with pytest.raises(sqlite3.IntegrityError), db.get_connection(udb_path) as conn:
         conn.execute("INSERT INTO configuracion VALUES ('r1', 'now', '{}')")
+
+
+def insert_prediction(path: Path, run_id: str, doc: str) -> None:
+    """Inserta una fila en predicciones."""
+    with db.get_connection(path) as conn:
+        conn.execute(
+            "INSERT INTO predicciones (run_id, created_at, doc) VALUES (?, 'now', ?)",
+            (run_id, doc),
+        )
+
+
+def test_predicciones_table_exists_after_init(udb_path: Path) -> None:
+    """init_unstructured_db crea también la colección predicciones."""
+    with db.get_connection(udb_path) as conn:
+        names = {
+            r["name"]
+            for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
+    assert "predicciones" in names
+
+
+def test_predicciones_allows_many_per_run_and_reads_nested_json(udb_path: Path) -> None:
+    """Una corrida puede tener varias predicciones; se leen con json_extract."""
+    doc = (
+        '{"inputs": {"fecha": "2026-09-01", "temperatura": 15.4},'
+        ' "models": {"xgboost": {"probabilidad": 0.9, "clase": 1}}}'
+    )
+    insert_prediction(udb_path, "r1", doc)
+    insert_prediction(udb_path, "r1", doc)
+    with db.get_connection(udb_path) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM predicciones").fetchone()[0] == 2
+        row = conn.execute(
+            "SELECT json_extract(doc, '$.inputs.fecha') AS fecha, "
+            "json_extract(doc, '$.models.xgboost.probabilidad') AS p "
+            "FROM predicciones WHERE run_id = 'r1' ORDER BY id LIMIT 1"
+        ).fetchone()
+    assert (row["fecha"], row["p"]) == ("2026-09-01", 0.9)
+
+
+def test_predicciones_rejects_invalid_json(udb_path: Path) -> None:
+    """Un documento que no es JSON no se puede guardar."""
+    with pytest.raises(sqlite3.IntegrityError):
+        insert_prediction(udb_path, "r1", "no es json")
+
+
+def test_init_adds_predicciones_to_an_old_database_without_losing_data(
+    tmp_path: Path,
+) -> None:
+    """Una base creada antes de esta tabla la recibe y conserva sus datos."""
+    path = tmp_path / "old.db"
+    with db.get_connection(path) as conn:
+        conn.executescript(
+            "CREATE TABLE resultados_modelos (id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            " run_id TEXT NOT NULL, scenario TEXT NOT NULL, model TEXT NOT NULL,"
+            " created_at TEXT NOT NULL, doc TEXT NOT NULL CHECK (json_valid(doc)),"
+            " UNIQUE (run_id, scenario, model));"
+            "INSERT INTO resultados_modelos (run_id, scenario, model, created_at, doc)"
+            " VALUES ('r1', 'A', 'xgboost', 'now', '{\"f1\": 0.5}');"
+        )
+    db.init_unstructured_db(path)
+    with db.get_connection(path) as conn:
+        tables = {
+            r["name"]
+            for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        }
+        kept = conn.execute(
+            "SELECT json_extract(doc, '$.f1') FROM resultados_modelos"
+        ).fetchone()[0]
+    assert {"predicciones", "configuracion", "resultados_modelos"} <= tables
+    assert kept == 0.5
