@@ -1,11 +1,15 @@
 """Variables derivadas: temperatura, calendario, rezagos y target."""
 
+import logging
+
 import numpy as np
 import pandas as pd
 
 from src import config
 from src.data import DATE_COLUMN, SECTOR_COLUMNS, validate_monthly_dates
 from src.logger import log_step
+
+logger = logging.getLogger(__name__)
 
 TEMPERATURE_COLUMN = "temperatura_promedio"
 COLD_COLUMN = "grados_dia_frio"
@@ -153,3 +157,96 @@ def add_target(
     out[THRESHOLD_COLUMN] = threshold
     out[TARGET_COLUMN] = target
     return out
+
+
+LAG_COLUMNS = [lag_column_name(c, k) for c in LAG_SOURCE_COLUMNS for k in LAGS]
+
+# Escenario A (anticipación): todo lo que se conoce antes de que termine el mes.
+FEATURES_A = [
+    TEMPERATURE_COLUMN,
+    COLD_COLUMN,
+    HEAT_COLUMN,
+    "mes_sin",
+    "mes_cos",
+    "anio",
+    *LAG_COLUMNS,
+]
+# Escenario B (diagnóstico): suma la potencia máxima, que ocurre en el mismo mes.
+FEATURES_B = [*FEATURES_A, "potencia_maxima"]
+SCENARIOS = {"A": FEATURES_A, "B": FEATURES_B}
+
+
+@log_step
+def build_dataset(df: pd.DataFrame) -> pd.DataFrame:
+    """Calcula todas las variables derivadas y el target (reglas fijas).
+
+    Args:
+        df: datos limpios (tabla ``datos_limpios``), ordenados por fecha.
+
+    Returns:
+        DataFrame con las variables de temperatura, calendario, rezagos y el
+        target. Los meses sin target (``demanda_alta`` nulo) se conservan.
+    """
+    out = add_temperature_features(df)
+    out = add_calendar_features(out)
+    out = add_lag_features(out)
+    return add_target(out)
+
+
+def get_model_data(df: pd.DataFrame, scenario: str) -> tuple[pd.DataFrame, pd.Series]:
+    """Devuelve ``X`` e ``y`` de un escenario, solo con los meses con target.
+
+    Args:
+        df: salida de ``build_dataset``.
+        scenario: ``"A"`` (anticipación) o ``"B"`` (diagnóstico).
+
+    Returns:
+        Tupla ``(X, y)``, con ``y`` entera (0 o 1) y el mismo índice que ``X``.
+
+    Raises:
+        ValueError: si el escenario no existe.
+    """
+    if scenario not in SCENARIOS:
+        raise ValueError(f"Escenario inválido: {scenario!r}; usar 'A' o 'B'")
+    labeled = df.dropna(subset=[TARGET_COLUMN])
+    return labeled[SCENARIOS[scenario]], labeled[TARGET_COLUMN].astype(int)
+
+
+def class_balance(y: pd.Series) -> dict[str, float]:
+    """Resume el balance de clases del target.
+
+    Args:
+        y: target binario (0 o 1).
+
+    Returns:
+        Diccionario con ``total``, ``positivos``, ``negativos`` y
+        ``proporcion_positivos``.
+    """
+    positives = int(y.sum())
+    total = len(y)
+    return {
+        "total": total,
+        "positivos": positives,
+        "negativos": total - positives,
+        "proporcion_positivos": positives / total if total else 0.0,
+    }
+
+
+def log_class_balance(y: pd.Series) -> dict[str, float]:
+    """Calcula el balance de clases y lo registra en el log.
+
+    Args:
+        y: target binario (0 o 1).
+
+    Returns:
+        El mismo diccionario que ``class_balance``.
+    """
+    balance = class_balance(y)
+    logger.info(
+        "Balance de clases: %d meses con target, %d positivos (%.1f %%), %d negativos",
+        balance["total"],
+        balance["positivos"],
+        100 * balance["proporcion_positivos"],
+        balance["negativos"],
+    )
+    return balance

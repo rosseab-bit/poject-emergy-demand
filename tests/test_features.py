@@ -211,3 +211,71 @@ def test_target_real_data_matches_plan() -> None:
     assert valid["fecha"].iloc[0] == pd.Timestamp("2007-01-01")
     assert int(valid["demanda_alta"].sum()) == 60
     assert int(valid["demanda_alta"].iloc[-36:].sum()) == 7
+
+
+FORBIDDEN_PREDICTORS = {
+    "demanda_total",
+    "demanda_residencial",
+    "comercio_e_industria",
+    "grandes_usuarios",
+    "cociente_demanda",
+    "umbral_demanda",
+    "demanda_alta",
+}
+
+
+def real_dataset() -> pd.DataFrame:
+    """Dataset real con todas las variables derivadas."""
+    return features.build_dataset(data.flag_repeated_power(data.load_raw()))
+
+
+def test_scenarios_exclude_same_month_demand_and_target_columns() -> None:
+    """Ningún escenario usa la demanda del propio mes ni columnas del target."""
+    for columns in features.SCENARIOS.values():
+        assert not FORBIDDEN_PREDICTORS & set(columns)
+
+
+def test_scenario_b_is_a_plus_peak_power() -> None:
+    """B es A más la potencia máxima, y solo eso."""
+    assert set(features.FEATURES_B) - set(features.FEATURES_A) == {"potencia_maxima"}
+    assert "potencia_maxima" not in features.FEATURES_A
+
+
+def test_get_model_data_real_scenarios() -> None:
+    """236 filas con target; A sin nulos y B con el de 2021-08."""
+    ds = real_dataset()
+    x_a, y_a = features.get_model_data(ds, "A")
+    x_b, y_b = features.get_model_data(ds, "B")
+    assert len(x_a) == len(y_a) == len(x_b) == 236
+    assert list(x_a.columns) == features.FEATURES_A
+    assert list(x_b.columns) == features.FEATURES_B
+    assert x_a.isna().sum().sum() == 0
+    assert x_b.isna().sum().sum() == 1
+    assert set(y_a.unique()) == {0, 1}
+    assert y_a.equals(y_b)
+
+
+def test_get_model_data_rejects_unknown_scenario() -> None:
+    """Un escenario inexistente lanza ValueError."""
+    with pytest.raises(ValueError, match="Escenario inválido"):
+        features.get_model_data(real_dataset(), "C")
+
+
+def test_class_balance() -> None:
+    """Cuenta positivos, negativos y proporción."""
+    balance = features.class_balance(pd.Series([1, 0, 0, 1, 0]))
+    assert balance == {
+        "total": 5,
+        "positivos": 2,
+        "negativos": 3,
+        "proporcion_positivos": 0.4,
+    }
+
+
+def test_class_balance_real_data() -> None:
+    """Con los datos reales: 60 positivos de 236 (25,4 %)."""
+    _, y = features.get_model_data(real_dataset(), "A")
+    balance = features.class_balance(y)
+    assert balance["total"] == 236
+    assert balance["positivos"] == 60
+    assert balance["proporcion_positivos"] == pytest.approx(60 / 236)

@@ -31,6 +31,8 @@ def test_run_etl_end_to_end(tmp_path: Path) -> None:
         "CSV leído: 308",
         "repetidos: 2",
         "datos_limpios guardada: 308",
+        "Fin: build_dataset",
+        "Balance de clases: 236 meses con target, 60 positivos (25.4 %)",
         "Fin: run_etl_steps",
     ):
         assert expected in messages
