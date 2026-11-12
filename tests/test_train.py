@@ -1,9 +1,10 @@
 """Tests de src/train.py."""
 
+import numpy as np
 import pandas as pd
 import pytest
 
-from src import config, data, features, train
+from src import config, data, features, models, train
 
 
 def make_xy(n: int = 100) -> tuple[pd.DataFrame, pd.Series]:
@@ -63,3 +64,56 @@ def test_split_holdout_real_data() -> None:
     assert int(y_te.sum()) == 12
     assert int(y_tr.sum()) == 48
     assert ds.loc[x_tr.index, "fecha"].max() < ds.loc[x_te.index, "fecha"].min()
+
+
+def make_series_data(n: int = 150, seed: int = 0) -> tuple[pd.DataFrame, pd.Series]:
+    """Datos ordenados con señal, para probar la búsqueda."""
+    rng = np.random.default_rng(seed)
+    x = pd.DataFrame(rng.normal(size=(n, 3)), columns=list("abc"))
+    y = pd.Series((x["a"] + 0.5 * rng.normal(size=n) > 0.5).astype(int))
+    return x, y
+
+
+def test_make_cv_is_temporal_and_uses_config() -> None:
+    """Hay config.CV_SPLITS cortes y la validación siempre es posterior."""
+    x, _ = make_series_data()
+    splits = list(train.make_cv().split(x))
+    assert len(splits) == config.CV_SPLITS
+    for tr, va in splits:
+        assert tr.max() < va.min()
+
+
+@pytest.mark.parametrize("name", models.MODEL_NAMES)
+def test_search_hyperparameters_returns_consistent_result(name: str) -> None:
+    """Devuelve parámetros de la grilla, F1 por corte, promedio, desvío y modelo."""
+    x, y = make_series_data()
+    res = train.search_hyperparameters(name, x, y)
+    grid = models.get_param_grid(name)
+    assert res.model == name
+    assert set(res.best_params) == set(grid)
+    for key, value in res.best_params.items():
+        assert value in grid[key]
+    assert len(res.cv_scores) == config.CV_SPLITS
+    assert all(0.0 <= s <= 1.0 for s in res.cv_scores)
+    assert res.cv_mean == pytest.approx(np.mean(res.cv_scores))
+    assert res.cv_std == pytest.approx(np.std(res.cv_scores, ddof=1))
+    assert set(np.unique(res.estimator.predict(x))) <= {0, 1}
+
+
+def test_search_hyperparameters_is_reproducible() -> None:
+    """Dos búsquedas iguales dan los mismos resultados."""
+    x, y = make_series_data()
+    a = train.search_hyperparameters(models.RANDOM_FOREST, x, y)
+    b = train.search_hyperparameters(models.RANDOM_FOREST, x, y)
+    assert a.best_params == b.best_params
+    assert a.cv_scores == b.cv_scores
+
+
+def test_search_hyperparameters_real_data_uses_only_training_rows() -> None:
+    """Con datos reales y escenario A busca solo sobre las 188 filas de train."""
+    ds = features.build_dataset(data.flag_repeated_power(data.load_raw()))
+    x, y = features.get_model_data(ds, "A")
+    x_tr, _, y_tr, _ = train.split_holdout(x, y)
+    res = train.search_hyperparameters(models.LOGISTIC_REGRESSION, x_tr, y_tr)
+    assert len(res.cv_scores) == config.CV_SPLITS
+    assert res.estimator.named_steps["imputer"].statistics_.shape[0] == x_tr.shape[1]
