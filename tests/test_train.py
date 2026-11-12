@@ -212,3 +212,49 @@ def test_train_model_is_reproducible() -> None:
     assert first.search.best_params == second.search.best_params
     assert first.test.f1 == second.test.f1
     assert first.test.proba == second.test.proba
+
+
+def test_baseline_always_high_known_values() -> None:
+    """'Siempre alta' acierta todos los positivos y su precision es la proporción."""
+    x = pd.DataFrame({"a": range(8)})
+    y_train = pd.Series([0, 1, 0, 0, 1, 0, 0, 1])
+    y_test = pd.Series([1, 0, 0, 0])
+    res = train.evaluate_baselines(x, y_train, x.iloc[:4], y_test)
+    always = res[train.BASELINE_ALWAYS_HIGH]
+    assert always.confusion_matrix == [[0, 3], [0, 1]]
+    assert always.recall == 1.0
+    assert always.precision == pytest.approx(0.25)
+    assert always.f1 == pytest.approx(0.4)
+
+
+def test_baseline_random_is_reproducible_and_trained_on_train_only() -> None:
+    """El aleatorio usa la semilla de config y da lo mismo en dos corridas."""
+    ds = real_dataset()
+    x, y = features.get_model_data(ds, "A")
+    x_tr, x_te, y_tr, y_te = train.split_holdout(x, y)
+    first = train.evaluate_baselines(x_tr, y_tr, x_te, y_te)
+    second = train.evaluate_baselines(x_tr, y_tr, x_te, y_te)
+    assert set(first) == {train.BASELINE_ALWAYS_HIGH, train.BASELINE_RANDOM}
+    assert first[train.BASELINE_RANDOM].y_pred == second[train.BASELINE_RANDOM].y_pred
+    assert 0 < sum(first[train.BASELINE_RANDOM].y_pred) < 48
+
+
+def test_baseline_always_high_real_data_f1_is_0_4() -> None:
+    """En el hold-out real (12 de 48) la regla trivial da F1 = 0,40."""
+    ds = real_dataset()
+    x, y = features.get_model_data(ds, "A")
+    x_tr, x_te, y_tr, y_te = train.split_holdout(x, y)
+    always = train.evaluate_baselines(x_tr, y_tr, x_te, y_te)[
+        train.BASELINE_ALWAYS_HIGH
+    ]
+    assert always.confusion_matrix == [[0, 36], [0, 12]]
+    assert always.f1 == pytest.approx(0.4)
+
+
+def test_train_model_includes_baselines() -> None:
+    """Cada ModelRun trae las referencias evaluadas en el mismo hold-out."""
+    run = train.train_model(real_dataset(), models.LOGISTIC_REGRESSION, "A")
+    assert set(run.baselines) == {train.BASELINE_ALWAYS_HIGH, train.BASELINE_RANDOM}
+    assert (
+        sum(map(sum, run.baselines[train.BASELINE_ALWAYS_HIGH].confusion_matrix)) == 48
+    )

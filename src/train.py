@@ -6,6 +6,7 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 from sklearn.base import BaseEstimator
+from sklearn.dummy import DummyClassifier
 from sklearn.metrics import (
     accuracy_score,
     confusion_matrix,
@@ -20,6 +21,9 @@ from src import config, features, models
 from src.logger import log_step
 
 logger = logging.getLogger(__name__)
+
+BASELINE_ALWAYS_HIGH = "siempre_alta"
+BASELINE_RANDOM = "aleatorio_proporcional"
 
 # F1 de la clase "alta" (1); si no predice positivos vale 0, sin advertencias.
 F1_SCORER = make_scorer(f1_score, pos_label=1, zero_division=0)
@@ -205,6 +209,7 @@ class ModelRun:
         n_test: filas del hold-out.
         search: resultado de la búsqueda (validación cruzada y pipeline).
         test: métricas en el hold-out.
+        baselines: métricas de las líneas de referencia en el mismo hold-out.
     """
 
     scenario: str
@@ -214,6 +219,45 @@ class ModelRun:
     n_test: int
     search: SearchResult
     test: EvalResult
+    baselines: dict[str, EvalResult]
+
+
+@log_step
+def evaluate_baselines(
+    x_train: pd.DataFrame,
+    y_train: pd.Series,
+    x_test: pd.DataFrame,
+    y_test: pd.Series,
+) -> dict[str, EvalResult]:
+    """Evalúa dos líneas de referencia sin información de las variables.
+
+    - ``siempre_alta``: marca todos los meses como "alta".
+    - ``aleatorio_proporcional``: sortea la clase según la proporción de
+      positivos del entrenamiento (con la semilla de ``config``).
+
+    Sirven para saber si un modelo aporta algo más que el azar o que la regla
+    trivial. Se ajustan solo con el entrenamiento.
+
+    Args:
+        x_train: variables de entrenamiento.
+        y_train: target de entrenamiento.
+        x_test: variables del hold-out.
+        y_test: target del hold-out.
+
+    Returns:
+        Diccionario nombre de referencia a ``EvalResult``.
+    """
+    references = {
+        BASELINE_ALWAYS_HIGH: DummyClassifier(strategy="constant", constant=1),
+        BASELINE_RANDOM: DummyClassifier(
+            strategy="stratified", random_state=config.SEED
+        ),
+    }
+    results = {}
+    for name, dummy in references.items():
+        dummy.fit(x_train, y_train)
+        results[name] = evaluate(dummy, x_test, y_test)
+    return results
 
 
 @log_step
@@ -235,13 +279,17 @@ def train_model(dataset: pd.DataFrame, name: str, scenario: str) -> ModelRun:
     x_train, x_test, y_train, y_test = split_holdout(x, y)
     search = search_hyperparameters(name, x_train, y_train)
     test = evaluate(search.estimator, x_test, y_test)
+    baselines = evaluate_baselines(x_train, y_train, x_test, y_test)
     logger.info(
-        "Resultado %s/%s: F1 validación %.3f ± %.3f, F1 hold-out %.3f",
+        "Resultado %s/%s: F1 validación %.3f ± %.3f, F1 hold-out %.3f "
+        "(siempre alta %.3f, aleatorio %.3f)",
         scenario,
         name,
         search.cv_mean,
         search.cv_std,
         test.f1,
+        baselines[BASELINE_ALWAYS_HIGH].f1,
+        baselines[BASELINE_RANDOM].f1,
     )
     return ModelRun(
         scenario=scenario,
@@ -251,6 +299,7 @@ def train_model(dataset: pd.DataFrame, name: str, scenario: str) -> ModelRun:
         n_test=len(x_test),
         search=search,
         test=test,
+        baselines=baselines,
     )
 
 
