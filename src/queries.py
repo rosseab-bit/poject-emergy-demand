@@ -314,3 +314,84 @@ def seasonality_by_month(df: pd.DataFrame) -> pd.DataFrame:
     month = indexed[data.DATE_COLUMN].dt.month
     mean = indexed.groupby(month)["indice_demanda"].mean()
     return mean.rename("indice_medio").to_frame().rename_axis("mes")
+
+
+def feature_importance_for(
+    run_id: str,
+    scenario: str,
+    model: str,
+    unstructured_path: Path | None = None,
+    models_dir: Path | None = None,
+) -> pd.DataFrame:
+    """Importancia de variables de un modelo guardado (verifica su hash).
+
+    Args:
+        run_id: identificador de la corrida.
+        scenario: ``"A"`` o ``"B"``.
+        model: nombre del modelo.
+        unstructured_path: ruta de ``unstructured.db``; por defecto la de
+            ``config``.
+        models_dir: carpeta de modelos; por defecto ``config.MODELS_DIR``.
+
+    Returns:
+        Salida de ``results.feature_importance``.
+    """
+    doc = results.load_result(run_id, scenario, model, unstructured_path)
+    estimator = results.load_model(doc, models_dir)
+    return results.feature_importance(estimator, doc["features"])
+
+
+def scenario_comparison(table: pd.DataFrame) -> pd.DataFrame:
+    """Compara el escenario B (con potencia máxima) contra el A por modelo.
+
+    Args:
+        table: salida de ``results_table``.
+
+    Returns:
+        Una fila por modelo con los dos escenarios entrenados: F1 de hold-out y
+        de validación en A y B, y la diferencia B menos A. Vacío si falta alguno.
+    """
+    columns = ["model", "f1_A", "f1_B", "dif_f1", "cv_A", "cv_B", "dif_cv"]
+    a = table[table["scenario"] == "A"].set_index("model")
+    b = table[table["scenario"] == "B"].set_index("model")
+    common = [
+        name for name in models.MODEL_NAMES if name in a.index and name in b.index
+    ]
+    rows = [
+        (
+            name,
+            a.at[name, "f1"],
+            b.at[name, "f1"],
+            b.at[name, "f1"] - a.at[name, "f1"],
+            a.at[name, "cv_mean"],
+            b.at[name, "cv_mean"],
+            b.at[name, "cv_mean"] - a.at[name, "cv_mean"],
+        )
+        for name in common
+    ]
+    return pd.DataFrame(rows, columns=columns)
+
+
+def noise_summary(
+    table: pd.DataFrame, docs: list[dict[str, object]]
+) -> dict[str, float] | None:
+    """Datos para advertir cuánto ruido tienen las métricas de una corrida.
+
+    Args:
+        table: salida de ``results_table``.
+        docs: salida de ``result_docs``.
+
+    Returns:
+        ``None`` si no hay resultados. Si no, ``n_test`` (meses del hold-out),
+        ``positives`` (meses altos reales en el hold-out), ``max_cv_std`` (mayor
+        desvío de validación) y ``always_high_f1`` (F1 de la referencia).
+    """
+    if table.empty or not docs:
+        return None
+    predictions = docs[0]["predictions"]
+    return {
+        "n_test": len(predictions),
+        "positives": sum(p["real"] for p in predictions),
+        "max_cv_std": float(table["cv_std"].max()),
+        "always_high_f1": float(table["f1_siempre_alta"].iloc[0]),
+    }

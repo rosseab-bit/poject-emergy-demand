@@ -1,30 +1,11 @@
 """Página Entrenamiento: elegir escenarios y modelos, entrenar y ver métricas."""
 
-import pandas as pd
 import streamlit as st
 
 from app_pages import state
 from app_pages.labels import SCENARIO_LABELS, model_label
+from app_pages.tables import results_for_display
 from src import models, pipeline, queries
-
-
-def results_for_display(table: pd.DataFrame) -> pd.DataFrame:
-    """Tabla de resultados con columnas y valores listos para mostrar."""
-    shown = pd.DataFrame(
-        {
-            "Escenario": table["scenario"],
-            "Modelo": table["model"].map(model_label),
-            "F1 validación (promedio)": table["cv_mean"],
-            "± desvío": table["cv_std"],
-            "Accuracy hold-out": table["accuracy"],
-            "Precision": table["precision"],
-            "Recall": table["recall"],
-            "F1 hold-out": table["f1"],
-            "F1 «siempre alta»": table["f1_siempre_alta"],
-            "F1 aleatorio": table["f1_aleatorio"],
-        }
-    )
-    return shown
 
 
 def _render_results(run_id: str) -> None:

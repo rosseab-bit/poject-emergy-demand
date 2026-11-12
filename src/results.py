@@ -10,6 +10,8 @@ from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 import joblib
+import numpy as np
+import pandas as pd
 
 from src import config, db, features, models
 from src.logger import log_step
@@ -373,3 +375,38 @@ def has_results(run_id: str, db_path: Path | None = None) -> bool:
             "SELECT 1 FROM resultados_modelos WHERE run_id = ? LIMIT 1", (run_id,)
         ).fetchone()
     return row is not None
+
+
+def feature_importance(estimator: object, feature_names: list[str]) -> pd.DataFrame:
+    """Importancia de cada variable en un pipeline ya entrenado.
+
+    - Regresión logística: coeficientes (las variables están estandarizadas
+      dentro del pipeline, así que son comparables; el signo indica el sentido).
+    - Random Forest y XGBoost: ``feature_importances_`` (suman 1, sin signo).
+
+    Args:
+        estimator: ``Pipeline`` con un paso final llamado ``clf``.
+        feature_names: nombres de las variables, en el orden de entrenamiento.
+
+    Returns:
+        DataFrame con ``feature``, ``importancia`` y ``tipo`` (``coeficiente``
+        o ``importancia``), ordenado de mayor a menor valor absoluto.
+
+    Raises:
+        ValueError: si el clasificador no expone coeficientes ni importancias o
+            su cantidad no coincide con las variables.
+    """
+    clf = estimator.named_steps["clf"]
+    if hasattr(clf, "coef_"):
+        values, kind = np.ravel(clf.coef_), "coeficiente"
+    elif hasattr(clf, "feature_importances_"):
+        values, kind = np.asarray(clf.feature_importances_), "importancia"
+    else:
+        raise ValueError(f"{type(clf).__name__} no expone importancias de variables")
+    if len(values) != len(feature_names):
+        raise ValueError("La cantidad de variables no coincide con el modelo")
+    table = pd.DataFrame(
+        {"feature": feature_names, "importancia": values.astype(float), "tipo": kind}
+    )
+    order = table["importancia"].abs().sort_values(ascending=False).index
+    return table.loc[order].reset_index(drop=True)

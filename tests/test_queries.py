@@ -5,7 +5,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from src import config, data, db, pipeline, queries, results
+from src import config, data, db, features, pipeline, queries, results
 
 LR = ("logistic_regression",)
 
@@ -258,3 +258,102 @@ def test_seasonality_by_month_has_twelve_months(etl_db: Path) -> None:
     assert season.index.tolist() == list(range(1, 13))
     assert season["indice_medio"].mean() == pytest.approx(1.0, abs=0.02)
     assert season["indice_medio"].notna().all()
+
+
+def test_feature_importance_logistic_regression_has_signed_coefficients(
+    trained_run: dict,
+) -> None:
+    """Regresión logística: un coeficiente por variable, con signo, ordenados."""
+    table = queries.feature_importance_for(
+        trained_run["run_id"],
+        "A",
+        "logistic_regression",
+        trained_run["unstructured_path"],
+        trained_run["models_dir"],
+    )
+    assert table["feature"].sort_values().tolist() == sorted(features.FEATURES_A)
+    assert set(table["tipo"]) == {"coeficiente"}
+    assert (table["importancia"] < 0).any() and (table["importancia"] > 0).any()
+    magnitudes = table["importancia"].abs().tolist()
+    assert magnitudes == sorted(magnitudes, reverse=True)
+
+
+def test_feature_importance_random_forest_sums_to_one_and_b_has_power(
+    trained_run: dict,
+) -> None:
+    """Random Forest: importancias sin signo que suman 1; B incluye la potencia."""
+    table = queries.feature_importance_for(
+        trained_run["run_id"],
+        "B",
+        "random_forest",
+        trained_run["unstructured_path"],
+        trained_run["models_dir"],
+    )
+    assert set(table["tipo"]) == {"importancia"}
+    assert table["importancia"].sum() == pytest.approx(1.0)
+    assert (table["importancia"] >= 0).all()
+    assert "potencia_maxima" in table["feature"].tolist()
+    assert len(table) == len(features.FEATURES_B)
+
+
+def test_feature_importance_rejects_models_without_importances() -> None:
+    """Un clasificador sin coeficientes ni importancias lanza ValueError."""
+    from sklearn.dummy import DummyClassifier
+    from sklearn.pipeline import Pipeline
+
+    pipe = Pipeline([("clf", DummyClassifier())])
+    with pytest.raises(ValueError, match="no expone"):
+        results.feature_importance(pipe, ["a"])
+
+
+def test_feature_importance_rejects_wrong_number_of_names() -> None:
+    """Si la cantidad de nombres no coincide con el modelo falla."""
+    import numpy as np
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.pipeline import Pipeline
+
+    clf = LogisticRegression().fit(np.array([[0.0, 1.0], [1.0, 0.0]]), [0, 1])
+    with pytest.raises(ValueError, match="no coincide"):
+        results.feature_importance(Pipeline([("clf", clf)]), ["solo_una"])
+
+
+def test_scenario_comparison_computes_b_minus_a(trained_run: dict) -> None:
+    """La comparación A contra B calcula las diferencias B menos A por modelo."""
+    table = queries.results_table(
+        trained_run["run_id"], trained_run["unstructured_path"]
+    )
+    comparison = queries.scenario_comparison(table)
+    assert comparison["model"].tolist() == ["logistic_regression", "random_forest"]
+    for row in comparison.itertuples():
+        a = table[(table["scenario"] == "A") & (table["model"] == row.model)].iloc[0]
+        b = table[(table["scenario"] == "B") & (table["model"] == row.model)].iloc[0]
+        assert row.f1_A == a["f1"] and row.f1_B == b["f1"]
+        assert row.dif_f1 == pytest.approx(b["f1"] - a["f1"])
+        assert row.dif_cv == pytest.approx(b["cv_mean"] - a["cv_mean"])
+
+
+def test_scenario_comparison_needs_both_scenarios(trained_run: dict) -> None:
+    """Con un solo escenario no hay comparación."""
+    table = queries.results_table(
+        trained_run["run_id"], trained_run["unstructured_path"]
+    )
+    only_a = table[table["scenario"] == "A"]
+    assert queries.scenario_comparison(only_a).empty
+
+
+def test_noise_summary_real_numbers(trained_run: dict) -> None:
+    """Resume el hold-out: 48 meses, 12 altos, desvío máximo y referencia 0,40."""
+    path = trained_run["unstructured_path"]
+    table = queries.results_table(trained_run["run_id"], path)
+    docs = queries.result_docs(trained_run["run_id"], path)
+    noise = queries.noise_summary(table, docs)
+    assert noise["n_test"] == 48
+    assert noise["positives"] == 12
+    assert noise["max_cv_std"] == pytest.approx(table["cv_std"].max())
+    assert noise["always_high_f1"] == pytest.approx(0.4)
+
+
+def test_noise_summary_without_results_is_none() -> None:
+    """Sin resultados no hay resumen."""
+    empty = pd.DataFrame(columns=queries.RESULT_COLUMNS)
+    assert queries.noise_summary(empty, []) is None
