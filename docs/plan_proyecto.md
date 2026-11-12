@@ -66,9 +66,9 @@ tp_demanda/
 
 **Etapa 1. Logger y capa de base de datos.** `SQLiteHandler`, `@log_step`, tablas `logs` y `runs`, `run_id`, conexión por operación (por los hilos de Streamlit), modo WAL. *Listo cuando:* un test escribe y lee eventos de `logs`.
 
-**Etapa 2. Carga y limpieza → Tabla 1.** Leer el CSV, tratar los dos valores repetidos de potencia máxima (2002-03, 2021-08), nulos de sectores previos a 2005, averiguar la zona de la temperatura. Guardar en `datos_limpios`. *Listo cuando:* la tabla tiene 260 filas completas y todo quedó logueado.
+**Etapa 2. Carga y limpieza → Tabla 1.** Leer el CSV, tratar los dos valores repetidos de potencia máxima (2002-03, 2021-08: se ponen en nulo y se marcan con `potencia_repetida`; el nulo lo imputa el `Pipeline`), validar que los nulos de sectores sean solo previos a 2005 (no se imputan), averiguar la zona de la temperatura. Guardar en `datos_limpios` los 308 meses (2001-01 a 2026-08), porque el target y los rezagos necesitan la `demanda_total` de 2001-2004 como historia. *Listo cuando:* la tabla tiene 308 filas, de las cuales 259 están completas (las 260 de 2005 en adelante, menos 2021-08 por la potencia repetida), y todo quedó logueado.
 
-**Etapa 3. Variables y target.** Distancia a ~18 °C o grados-día de frío y calor, mes cíclico, año, rezagos de demanda total y sectorial (1 y 12 meses), target relativo (solo pasado), conjuntos A y B. *Listo cuando:* hay un test que verifica que el target no usa datos futuros y se informa el balance de clases.
+**Etapa 3. Variables y target.** Distancia a ~18 °C o grados-día de frío y calor, mes cíclico, año, rezagos de demanda total y sectorial (1 y 12 meses; como los sectores empiezan en 2005-01, el rezago de 12 meses de los sectores es nulo en 2005: decidir si se imputa en el `Pipeline` o se descartan esos 12 meses), target relativo (solo pasado), conjuntos A y B. *Listo cuando:* hay un test que verifica que el target no usa datos futuros y se informa el balance de clases.
 
 **Etapa 4. Modelos.** `Pipeline` de scikit-learn (imputación, escalado, codificación) con los tres modelos y los dos escenarios (A y B), manejo del desbalance (`class_weight`, `scale_pos_weight`), búsqueda de hiperparámetros con `TimeSeriesSplit`, hold-out temporal final, métricas (accuracy, precision, recall, F1) y matriz de confusión. Misma semilla y mismos cortes para los tres. *Listo cuando:* los seis resultados (3 modelos × 2 escenarios) se entrenan por línea de comandos y dan métricas.
 
@@ -115,6 +115,7 @@ tp_demanda/
 - Tamaño final del hold-out temporal.
 - Cómo se entregan las bases `.db` (versionadas en el repo o generadas con un script), se decide al final.
 - Si la app permite subir otro CSV: la propuesta es que no, y que use solo el CSV del repo, para que el experimento sea reproducible (ver sección 11).
+- Rezago de 12 meses de los sectores en 2005 (nulo por falta de historia): imputar en el `Pipeline` o descartar esos meses. Se decide en la Etapa 3.
 - Umbral exacto del target: se fija en la Etapa 3 mirando la distribución del cociente entre la demanda del mes y el promedio de los 3 años previos del mismo mes.
 
 ## 9. Ritmo de trabajo (sin fecha fija)
