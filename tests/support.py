@@ -121,5 +121,5 @@ def user_tables(db_path: Path) -> dict[str, int]:
         conn.close()
 
 
-STRUCTURED_TABLES = {"datos_limpios", "logs", "runs"}
+STRUCTURED_TABLES = {"datos_limpios", "datos_originales", "logs", "runs"}
 UNSTRUCTURED_TABLES = {"configuracion", "predicciones", "resultados_modelos"}

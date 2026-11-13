@@ -156,6 +156,52 @@ CLEAN_COLUMNS = [DATE_COLUMN, *VALUE_COLUMNS, "potencia_repetida"]
 
 
 @log_step
+def save_raw_data(csv_path: Path | None = None, db_path: Path | None = None) -> int:
+    """Guarda el CSV original completo, sin modificar, en ``datos_originales``.
+
+    Conserva las 30 columnas (también las de cada distribuidora) tal como
+    vienen. Reemplaza el contenido anterior en una sola transacción, así que
+    correr el ETL dos veces deja el mismo resultado. El archivo de
+    ``data/raw/`` no se toca.
+
+    Args:
+        csv_path: ruta del CSV; por defecto ``config.RAW_CSV_PATH``.
+        db_path: ruta de la base; por defecto ``structured.db``.
+
+    Returns:
+        Cantidad de filas guardadas.
+
+    Raises:
+        ValueError: si las columnas del CSV no son las esperadas.
+    """
+    path = csv_path if csv_path is not None else config.RAW_CSV_PATH
+    df = pd.read_csv(path, dtype={RAW_DATE_COLUMN: str})
+    if tuple(df.columns) != config.RAW_COLUMNS:
+        raise ValueError(
+            "Las columnas del CSV no son las esperadas. Faltan: "
+            f"{sorted(set(config.RAW_COLUMNS) - set(df.columns))}; sobran: "
+            f"{sorted(set(df.columns) - set(config.RAW_COLUMNS))}."
+        )
+    db.init_structured_db(db_path)
+    out = df.astype(object).where(df.notna(), None)
+    rows = [tuple(r) for r in out.itertuples(index=False)]
+    placeholders = ", ".join("?" * len(config.RAW_COLUMNS))
+    with db.get_connection(db_path) as conn:
+        conn.execute("DELETE FROM datos_originales")
+        conn.executemany(
+            f"INSERT INTO datos_originales ({', '.join(config.RAW_COLUMNS)}) "
+            f"VALUES ({placeholders})",
+            rows,
+        )
+    logger.info(
+        "Tabla datos_originales guardada: %d filas, %d columnas",
+        len(rows),
+        len(config.RAW_COLUMNS),
+    )
+    return len(rows)
+
+
+@log_step
 def save_clean_data(df: pd.DataFrame, db_path: Path | None = None) -> int:
     """Guarda los datos limpios en la tabla ``datos_limpios`` (Tabla 1).
 

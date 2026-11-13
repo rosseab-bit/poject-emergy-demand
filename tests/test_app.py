@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+import mongomock
 import pytest
 from streamlit.testing.v1 import AppTest
 from support import (
@@ -14,7 +15,7 @@ from support import (
 from support import start_app as run_app
 
 from app_pages.sidebar import PAGE_NAMES
-from src import config, db, models, pipeline, queries, train
+from src import config, db, models, mongo, pipeline, queries, train
 
 
 def test_app_starts_without_runs(tmp_config: Path) -> None:
@@ -308,6 +309,58 @@ def test_first_start_creates_both_databases_empty(tmp_config: Path) -> None:
     assert user_tables(config.UNSTRUCTURED_DB_PATH) == dict.fromkeys(
         UNSTRUCTURED_TABLES, 0
     )
+
+
+def test_first_start_creates_the_mongodb_collections(
+    tmp_config: Path, mongo_db: mongomock.Database
+) -> None:
+    """Al abrir la app por primera vez aparecen las colecciones de MongoDB."""
+    assert mongo_db.list_collection_names() == []
+    at = run_app()
+    assert not at.exception
+    assert set(mongo_db.list_collection_names()) == set(mongo.COLLECTIONS)
+
+
+def test_mongodb_is_prepared_once_not_on_every_click(
+    tmp_config: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Cada clic vuelve a ejecutar el script, pero MongoDB se prepara una sola vez."""
+    calls: list[int] = []
+    real = mongo.init_mongo
+    monkeypatch.setattr(mongo, "init_mongo", lambda *a: calls.append(1) or real(*a))
+    at = run_app()
+    go_to(at, "Logs")
+    go_to(at, "Datos")
+    assert not at.exception
+    assert calls == [1]
+
+
+def test_app_explains_when_mongodb_is_not_available(
+    tmp_config: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Sin MongoDB la app lo dice con claridad y no sigue (sin tracebacks)."""
+
+    def unavailable(*args: object) -> None:
+        raise mongo.MongoUnavailableError("No se pudo conectar a MongoDB: sin red")
+
+    monkeypatch.setattr(mongo, "init_mongo", unavailable)
+    at = run_app()
+    assert not at.exception
+    assert any("No se pudo preparar MongoDB" in e.value for e in at.error)
+    assert any(".env.example" in i.value for i in at.info)
+    assert len(at.sidebar.radio) == 0  # no dibujó la app
+
+
+def test_app_explains_a_missing_env_file(tmp_config: Path, tmp_path: Path) -> None:
+    """Sin ``.env`` el mensaje indica cómo configurarlo."""
+    mongo.reset_client()
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(config, "ENV_PATH", tmp_path / "sin_env")
+        for name in (mongo.ENV_URI, mongo.ENV_PASSWORD, mongo.ENV_DB_NAME):
+            patch.delenv(name, raising=False)
+        at = run_app()
+    assert not at.exception
+    assert any("Copiá .env.example" in e.value for e in at.error)
 
 
 def test_a_second_start_does_not_touch_the_existing_data(tmp_config: Path) -> None:

@@ -6,6 +6,7 @@ from pathlib import Path
 
 import mongomock
 import pytest
+import streamlit as st
 from support import isolated_logging, tiny_grids
 
 from src import config, logger, mongo, pipeline
@@ -61,19 +62,18 @@ def clean_root_logger() -> Iterator[None]:
 
 
 @pytest.fixture(autouse=True)
-def clean_mongo_client() -> Iterator[None]:
-    """Olvida el cliente compartido de MongoDB al terminar CADA test."""
-    yield
-    mongo.reset_client()
-
-
-@pytest.fixture
 def mongo_db() -> Iterator[mongomock.Database]:
-    """Una base MongoDB simulada en memoria, instalada como cliente compartido."""
+    """Una base MongoDB simulada en memoria como cliente compartido de CADA test.
+
+    Es automática para que ningún test llegue por accidente al cluster real
+    configurado en el ``.env``. Al terminar olvida el cliente y vacía el caché de
+    Streamlit (la preparación de MongoDB de la app se guarda ahí).
+    """
     client = mongomock.MongoClient()
     mongo.use_client(client, "demanda_test")
     yield client["demanda_test"]
-    client.close()
+    mongo.reset_client()
+    st.cache_resource.clear()
 
 
 @pytest.fixture

@@ -25,11 +25,12 @@ import threading
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import NamedTuple
 from urllib.parse import quote_plus, unquote_plus, urlsplit
 
-from pymongo import MongoClient
+from pymongo import ASCENDING, DESCENDING, MongoClient
 from pymongo.database import Database
-from pymongo.errors import PyMongoError
+from pymongo.errors import CollectionInvalid, PyMongoError
 
 from src import config
 
@@ -45,6 +46,41 @@ RUNS = "runs"
 RESULTS = "resultados_modelos"
 CONFIGURATION = "configuracion"
 PREDICTIONS = "predicciones"
+
+
+class IndexSpec(NamedTuple):
+    """Un índice de una colección: nombre, claves y si es único."""
+
+    name: str
+    keys: list[tuple[str, int]]
+    unique: bool = False
+
+
+# Colecciones del proyecto con sus índices. Los únicos evitan duplicados (un
+# resultado por corrida, escenario y modelo); el resto acelera las búsquedas.
+COLLECTIONS: dict[str, tuple[IndexSpec, ...]] = {
+    LOGS: (IndexSpec("idx_logs_run_ts", [("run_id", ASCENDING), ("ts", ASCENDING)]),),
+    RUNS: (
+        IndexSpec("uq_runs_run_id", [("run_id", ASCENDING)], unique=True),
+        IndexSpec("idx_runs_started_at", [("started_at", DESCENDING)]),
+    ),
+    RESULTS: (
+        IndexSpec(
+            "uq_resultados_run_scenario_model",
+            [("run_id", ASCENDING), ("scenario", ASCENDING), ("model", ASCENDING)],
+            unique=True,
+        ),
+    ),
+    CONFIGURATION: (
+        IndexSpec("uq_configuracion_run_id", [("run_id", ASCENDING)], unique=True),
+    ),
+    PREDICTIONS: (
+        IndexSpec(
+            "idx_predicciones_run_created",
+            [("run_id", ASCENDING), ("created_at", ASCENDING)],
+        ),
+    ),
+}
 
 PASSWORD_PLACEHOLDER = re.compile(r"<[^<>]*>")
 APP_NAME = "tp-demanda-electrica"
@@ -225,14 +261,63 @@ def check_connection() -> None:
         MongoUnavailableError: si el servidor no responde o rechaza las
             credenciales. El mensaje no incluye la clave.
     """
-    client = get_client()
+    _ping(get_client())
+
+
+def _ping(client: MongoClient) -> None:
+    """``ping`` a un cliente, con un error propio y sin secretos si falla."""
     try:
         client.admin.command("ping")
     except PyMongoError as error:
-        raise MongoUnavailableError(
-            f"No se pudo conectar a MongoDB: {type(error).__name__}: "
-            f"{_redact(str(error))}"
+        raise _unavailable("No se pudo conectar a MongoDB", error) from None
+
+
+def _unavailable(summary: str, error: Exception) -> MongoUnavailableError:
+    """Arma el error de conexión con el tipo original y el mensaje limpio."""
+    return MongoUnavailableError(
+        f"{summary}: {type(error).__name__}: {_redact(str(error))}"
+    )
+
+
+def init_mongo(database: Database | None = None) -> None:
+    """Prepara MongoDB: comprueba la conexión y crea colecciones e índices.
+
+    Mongo crea las colecciones recién al primer ``insert``; acá se crean antes,
+    con sus índices, para que quien clona el proyecto no tenga que preparar
+    nada. Es idempotente: sobre una base ya preparada no cambia ni borra datos.
+
+    Args:
+        database: base a preparar; por defecto la del cliente compartido.
+
+    Raises:
+        MongoConfigError: si falta la configuración del ``.env``.
+        MongoUnavailableError: si no hay conexión o fallan las credenciales o
+            los permisos.
+    """
+    target = database if database is not None else get_database()
+    _ping(target.client)
+    try:
+        existing = set(target.list_collection_names())
+        for name, indexes in COLLECTIONS.items():
+            if name not in existing:
+                _create_collection(target, name)
+            for spec in indexes:
+                target[name].create_index(spec.keys, name=spec.name, unique=spec.unique)
+    except PyMongoError as error:
+        raise _unavailable(
+            "No se pudieron preparar las colecciones de MongoDB", error
         ) from None
+    log.debug(
+        "MongoDB listo: base %s con %d colecciones", target.name, len(COLLECTIONS)
+    )
+
+
+def _create_collection(database: Database, name: str) -> None:
+    """Crea una colección; si otro proceso la creó a la vez, sigue sin error."""
+    try:
+        database.create_collection(name)
+    except CollectionInvalid:
+        log.debug("La colección %s ya existía", name)
 
 
 def _redact(message: str) -> str:

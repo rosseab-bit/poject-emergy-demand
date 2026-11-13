@@ -5,7 +5,7 @@ import logging
 from collections.abc import Callable
 from pathlib import Path
 
-from src import config, data, db, features, logger, models, results, train
+from src import config, data, db, features, logger, models, mongo, results, train
 
 log = logging.getLogger(__name__)
 
@@ -13,7 +13,8 @@ log = logging.getLogger(__name__)
 @logger.log_step
 def run_etl_steps(csv_path: Path | None, db_path: Path | None) -> int:
     """Carga, limpia, guarda, deriva variables y target. Devuelve filas guardadas."""
-    df = data.load_raw(csv_path)
+    df = data.load_raw(csv_path)  # valida columnas y fechas antes de guardar
+    data.save_raw_data(csv_path, db_path)
     data.check_sector_nulls(df)
     cleaned = data.flag_repeated_power(df)
     log.info("Filas completas tras la limpieza: %d", data.count_complete_rows(cleaned))
@@ -256,7 +257,8 @@ def main(argv: list[str] | None = None) -> int:
         argv: argumentos de la línea de comandos; por defecto ``sys.argv[1:]``.
 
     Returns:
-        Código de salida: 0 si la corrida terminó bien y 1 si falló.
+        Código de salida: 0 si la corrida terminó bien y 1 si falló o si no se
+        pudo preparar MongoDB (falta el ``.env``, sin conexión o credenciales).
     """
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -265,7 +267,12 @@ def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(
         level=logging.INFO, format="%(levelname)s %(name)s: %(message)s"
     )
-    db.init_databases()  # en el primer arranque de un clon crea las bases vacías
+    try:
+        db.init_databases()  # en el primer arranque de un clon crea las bases
+        mongo.init_mongo()  # y las colecciones de MongoDB con sus índices
+    except (mongo.MongoConfigError, mongo.MongoUnavailableError) as error:
+        log.error("No se pudo preparar MongoDB: %s", error)
+        return 1
     try:
         run_id = (
             run_etl(seed=args.seed) if args.solo_etl else run_pipeline(seed=args.seed)

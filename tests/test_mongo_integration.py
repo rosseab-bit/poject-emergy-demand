@@ -23,6 +23,7 @@ def real_cluster() -> Iterator[None]:
         mongo.load_settings()
     except mongo.MongoConfigError as error:
         pytest.skip(f"sin credenciales de MongoDB: {error}")
+    mongo.reset_client()  # reemplaza el Mongo simulado por el cliente real
     yield
 
 

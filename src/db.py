@@ -46,6 +46,18 @@ CREATE TABLE IF NOT EXISTS datos_limpios (
 );
 """
 
+
+def _raw_table_ddl() -> str:
+    """DDL de ``datos_originales``: el CSV completo, la fecha como clave."""
+    first, *rest = config.RAW_COLUMNS
+    lines = [f"    {first} TEXT PRIMARY KEY"] + [f"    {c} REAL" for c in rest]
+    return (
+        "CREATE TABLE IF NOT EXISTS datos_originales (\n" + ",\n".join(lines) + "\n);\n"
+    )
+
+
+SCHEMA_RAW = _raw_table_ddl()
+
 SCHEMA_UNSTRUCTURED = """
 CREATE TABLE IF NOT EXISTS resultados_modelos (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -177,13 +189,13 @@ def checkpoint_all(
 
 
 def init_structured_db(db_path: Path | None = None) -> None:
-    """Crea las tablas ``runs``, ``logs`` y ``datos_limpios`` si no existen.
+    """Crea ``runs``, ``logs``, ``datos_originales`` y ``datos_limpios`` si faltan.
 
     Args:
         db_path: ruta de la base; por defecto ``structured.db``.
     """
     with get_connection(db_path) as conn:
-        conn.executescript(SCHEMA_STRUCTURED)
+        conn.executescript(SCHEMA_STRUCTURED + SCHEMA_RAW)
 
 
 def now_iso() -> str:

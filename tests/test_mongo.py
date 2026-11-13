@@ -17,6 +17,7 @@ def env_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Un ``.env`` temporal, ya apuntado desde ``config`` y sin variables del sistema."""
     path = tmp_path / ".env"
     monkeypatch.setattr(config, "ENV_PATH", path)
+    mongo.reset_client()  # que get_client() cree uno nuevo desde este .env
     for name in (mongo.ENV_URI, mongo.ENV_PASSWORD, mongo.ENV_DB_NAME):
         monkeypatch.delenv(name, raising=False)
     return path

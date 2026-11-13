@@ -5,10 +5,11 @@ import subprocess
 import sys
 from pathlib import Path
 
+import mongomock
 import pytest
 from support import STRUCTURED_TABLES, UNSTRUCTURED_TABLES, user_tables
 
-from src import config, pipeline, report
+from src import config, mongo, pipeline, report
 
 # main() inicializa las bases: que lo haga en una carpeta temporal, no en db/.
 pytestmark = pytest.mark.usefixtures("tmp_config")
@@ -192,9 +193,29 @@ def test_a_bad_argument_in_a_real_process_exits_with_2_without_running() -> None
     assert database_state() == before
 
 
-def test_main_creates_both_databases_before_running(recorder: Recorder) -> None:
-    """La línea de comandos también deja las dos bases listas, aunque no entrene."""
+def test_main_creates_both_databases_before_running(
+    recorder: Recorder, mongo_db: mongomock.Database
+) -> None:
+    """La línea de comandos también deja las bases listas, aunque no entrene."""
     assert not config.STRUCTURED_DB_PATH.exists()
+    assert mongo_db.list_collection_names() == []
     assert pipeline.main(["--solo-etl"]) == 0
     assert set(user_tables(config.STRUCTURED_DB_PATH)) == STRUCTURED_TABLES
     assert set(user_tables(config.UNSTRUCTURED_DB_PATH)) == UNSTRUCTURED_TABLES
+    assert set(mongo_db.list_collection_names()) == set(mongo.COLLECTIONS)
+
+
+def test_main_without_mongodb_fails_before_running(
+    recorder: Recorder, caplog: pytest.LogCaptureFixture, tmp_path: Path
+) -> None:
+    """Sin ``.env`` ni conexión, sale con 1, lo explica y no empieza la corrida."""
+    mongo.reset_client()
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(config, "ENV_PATH", tmp_path / ".env")
+        for name in (mongo.ENV_URI, mongo.ENV_PASSWORD, mongo.ENV_DB_NAME):
+            patch.delenv(name, raising=False)
+        with caplog.at_level(logging.ERROR):
+            assert pipeline.main([]) == 1
+    assert recorder.calls == []
+    assert "No se pudo preparar MongoDB" in caplog.text
+    assert ".env.example" in caplog.text
