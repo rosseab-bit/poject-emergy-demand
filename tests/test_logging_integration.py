@@ -3,13 +3,18 @@
 import logging
 from pathlib import Path
 
-from src import db, logger
+import mongomock
+from support import mongo_logs
+
+from src import db, logger, mongo
 
 
-def test_full_run_is_traceable_by_run_id(tmp_path: Path) -> None:
-    """Una corrida deja sus eventos en logs, atados a su run_id en runs."""
+def test_full_run_is_traceable_by_run_id(
+    tmp_path: Path, mongo_db: mongomock.Database
+) -> None:
+    """Una corrida deja sus eventos en MongoDB, atados a su run_id en runs."""
     db_path = tmp_path / "structured.db"
-    logger.setup_logging(db_path)
+    logger.setup_logging()
     db.init_structured_db(db_path)
     run_id = db.create_run(db_path=db_path)
     token = logger.current_run_id.set(run_id)
@@ -25,13 +30,11 @@ def test_full_run_is_traceable_by_run_id(tmp_path: Path) -> None:
         db.finish_run(run_id, "ok", db_path)
     finally:
         logger.current_run_id.reset(token)
+        logger.flush_logs()
 
-    with db.get_connection(db_path) as conn:
-        rows = conn.execute(
-            "SELECT l.message, r.status FROM logs l "
-            "JOIN runs r ON r.run_id = l.run_id WHERE l.run_id = ? ORDER BY l.id",
-            (run_id,),
-        ).fetchall()
-    assert [r["message"] for r in rows][1] == "trabajando"
-    assert len(rows) == 3
-    assert {r["status"] for r in rows} == {"ok"}
+    events = mongo_logs(run_id)
+    assert [e["message"] for e in events][1] == "trabajando"
+    assert len(events) == 3
+    assert {e["step"] for e in events} == {"paso"}
+    assert db.get_run(run_id, db_path)["status"] == "ok"
+    assert mongo_db[mongo.LOGS].count_documents({"run_id": run_id}) == 3

@@ -6,8 +6,9 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
+from support import mongo_logs
 
-from src import data, db, features, logger, predict
+from src import data, features, logger, predict
 
 
 @pytest.fixture(scope="module")
@@ -148,11 +149,9 @@ def test_build_input_rejects_bad_history(clean: pd.DataFrame) -> None:
 def test_build_input_adds_no_events_to_logs(
     clean: pd.DataFrame, tmp_path: Path
 ) -> None:
-    """Armar la fila no escribe eventos en la tabla logs."""
-    path = tmp_path / "structured.db"
-    logger.setup_logging(path)
+    """Armar la fila no escribe eventos en la colección logs."""
+    logger.setup_logging()
     logging.getLogger("src.predict").info("control: este sí se guarda")
     predict.build_input(clean, 15.0)
-    with db.get_connection(path) as conn:
-        messages = [r["message"] for r in conn.execute("SELECT message FROM logs")]
-    assert messages == ["control: este sí se guarda"]
+    logger.flush_logs()
+    assert [e["message"] for e in mongo_logs()] == ["control: este sí se guarda"]

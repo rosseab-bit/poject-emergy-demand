@@ -1,4 +1,4 @@
-"""Página Logs: eventos registrados en ``structured.db`` y lista de corridas."""
+"""Página Logs: eventos registrados en MongoDB y lista de corridas."""
 
 import streamlit as st
 
@@ -66,8 +66,8 @@ def render() -> None:
     """Dibuja la página Logs."""
     st.header("Logs")
     st.markdown(
-        "Todo lo que hace el código queda registrado en la tabla `logs` de "
-        "`structured.db`, atado al `run_id` de cada corrida."
+        "Todo lo que hace el código queda registrado en la colección `logs` de "
+        "MongoDB, atado al `run_id` de cada corrida y diferenciado por paso."
     )
     selected_run, levels, modules = _render_filters(state.current_run_id())
     _render_events(selected_run, levels, modules)

@@ -5,6 +5,7 @@ import sqlite3
 from pathlib import Path
 
 import pytest
+from support import mongo_logs
 
 from src import config, data, db, pipeline
 
@@ -90,12 +91,7 @@ def test_the_etl_fills_both_datasets(tmp_path: Path) -> None:
             conn.execute("SELECT COUNT(*) FROM datos_originales").fetchone()[0] == 308
         )
         assert conn.execute("SELECT COUNT(*) FROM datos_limpios").fetchone()[0] == 308
-        messages = [
-            r[0]
-            for r in conn.execute(
-                "SELECT message FROM logs WHERE run_id = ?", (run_id,)
-            )
-        ]
+    messages = [e["message"] for e in mongo_logs(run_id)]
     assert any(
         "datos_originales guardada: 308 filas, 30 columnas" in m for m in messages
     )

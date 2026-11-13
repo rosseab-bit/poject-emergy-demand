@@ -1,13 +1,14 @@
 """Tests de src/queries.py (lectura para la interfaz)."""
 
 import logging
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pandas as pd
 import pytest
-from support import isolated_logging, tiny_grids
+from support import isolated_logging, isolated_mongo, tiny_grids
 
-from src import config, data, db, features, pipeline, queries, results
+from src import config, data, db, features, mongo, pipeline, queries, results
 
 LR = ("logistic_regression",)
 
@@ -29,12 +30,12 @@ def trained(tmp_path_factory: pytest.TempPathFactory) -> dict:
         "db_path": base / "structured.db",
         "unstructured_path": base / "unstructured.db",
     }
-    with isolated_logging(), tiny_grids():
+    with isolated_logging(), isolated_mongo() as client, tiny_grids():
         run_id = pipeline.run_etl(db_path=paths["db_path"], seed=7)
         pipeline.run_training(
             run_id, models_dir=base / "models", model_names=LR, **paths
         )
-    return {"run_id": run_id, **paths}
+    return {"run_id": run_id, "mongo": client, **paths}
 
 
 def test_list_runs_empty_database_returns_empty_frame(paths: dict) -> None:
@@ -56,7 +57,7 @@ def test_list_runs_newest_first(paths: dict) -> None:
 
 def test_steps_after_etl_and_after_training(trained: dict, paths: dict) -> None:
     """El ETL se detecta en logs y el entrenamiento por los resultados."""
-    steps = queries.run_steps(trained["run_id"], **paths_of(trained))
+    steps = queries.run_steps(trained["run_id"], trained["unstructured_path"])
     assert steps == {
         "ETL": True,
         "Entrenamiento": True,
@@ -64,7 +65,7 @@ def test_steps_after_etl_and_after_training(trained: dict, paths: dict) -> None:
         "Reporte": False,
     }
     only_etl = pipeline.run_etl(db_path=paths["db_path"])
-    steps = queries.run_steps(only_etl, **paths)
+    steps = queries.run_steps(only_etl, paths["unstructured_path"])
     assert steps["ETL"] is True
     assert steps["Entrenamiento"] is False
 
@@ -158,56 +159,88 @@ def test_result_docs_include_confusion_matrices(trained: dict) -> None:
         assert sum(map(sum, matrix)) == 48
 
 
-def seed_logs(path: Path) -> None:
-    """Carga eventos de prueba en dos corridas."""
-    db.init_structured_db(path)
+def seed_logs() -> None:
+    """Carga eventos de prueba en dos corridas, en MongoDB, con horas crecientes."""
     rows = [
         ("r1", "INFO", "src.data", "a"),
         ("r1", "WARNING", "src.data", "b"),
         ("r1", "ERROR", "src.train", "c"),
         ("r2", "INFO", "src.train", "d"),
     ]
-    with db.get_connection(path) as conn:
-        for run_id, level, module, message in rows:
-            conn.execute(
-                "INSERT INTO logs (ts, level, module, message, run_id) "
-                "VALUES ('t', ?, ?, ?, ?)",
-                (level, module, message, run_id),
-            )
-
-
-def test_get_logs_filters(paths: dict) -> None:
-    """Se filtra por corrida, nivel y módulo, en orden cronológico."""
-    seed_logs(paths["db_path"])
-    path = paths["db_path"]
-    assert queries.get_logs(db_path=path)["message"].tolist() == ["a", "b", "c", "d"]
-    assert queries.get_logs("r1", db_path=path)["message"].tolist() == ["a", "b", "c"]
-    assert queries.get_logs("r1", levels=["ERROR"], db_path=path)[
-        "message"
-    ].tolist() == ["c"]
-    both = queries.get_logs(
-        levels=["INFO", "ERROR"], modules=["src.train"], db_path=path
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    mongo.get_database()[mongo.LOGS].insert_many(
+        [
+            {
+                "ts": start + timedelta(seconds=index),
+                "level": level,
+                "module": module,
+                "message": message,
+                "run_id": run_id,
+            }
+            for index, (run_id, level, module, message) in enumerate(rows)
+        ]
     )
+
+
+def test_get_logs_filters() -> None:
+    """Se filtra por corrida, nivel y módulo, en orden cronológico."""
+    seed_logs()
+    assert queries.get_logs()["message"].tolist() == ["a", "b", "c", "d"]
+    assert queries.get_logs("r1")["message"].tolist() == ["a", "b", "c"]
+    assert queries.get_logs("r1", levels=["ERROR"])["message"].tolist() == ["c"]
+    both = queries.get_logs(levels=["INFO", "ERROR"], modules=["src.train"])
     assert both["message"].tolist() == ["c", "d"]
-    assert queries.get_logs("r9", db_path=path).empty
+    assert queries.get_logs("r9").empty
 
 
-def test_list_log_modules(paths: dict) -> None:
+def test_get_logs_returns_the_documented_columns_even_when_empty() -> None:
+    """Sin eventos devuelve un DataFrame vacío con todas las columnas."""
+    empty = queries.get_logs()
+    assert empty.empty and list(empty.columns) == queries.LOG_COLUMNS
+
+
+def test_get_logs_includes_the_step_fields_when_present() -> None:
+    """Los campos step, event y duration_ms salen, y son nulos donde no aplican."""
+    mongo.get_database()[mongo.LOGS].insert_many(
+        [
+            {
+                "ts": datetime(2026, 1, 1, tzinfo=UTC),
+                "level": "INFO",
+                "module": "m",
+                "message": "Fin: x",
+                "run_id": "r",
+                "step": "x",
+                "event": "fin",
+                "duration_ms": 1500,
+            },
+            {
+                "ts": datetime(2026, 1, 2, tzinfo=UTC),
+                "level": "INFO",
+                "module": "m",
+                "message": "suelto",
+                "run_id": "r",
+            },
+        ]
+    )
+    logs = queries.get_logs("r")
+    assert logs["step"].tolist()[0] == "x" and pd.isna(logs["step"].tolist()[1])
+    assert logs["duration_ms"].tolist()[0] == 1500
+    assert logs["event"].tolist()[0] == "fin"
+
+
+def test_list_log_modules() -> None:
     """Lista los módulos con eventos, de una corrida o de todas."""
-    seed_logs(paths["db_path"])
-    assert queries.list_log_modules(db_path=paths["db_path"]) == [
-        "src.data",
-        "src.train",
-    ]
-    assert queries.list_log_modules("r2", db_path=paths["db_path"]) == ["src.train"]
+    seed_logs()
+    assert queries.list_log_modules() == ["src.data", "src.train"]
+    assert queries.list_log_modules("r2") == ["src.train"]
 
 
-def test_filters_use_parameters_not_string_building(paths: dict) -> None:
-    """Un valor con comillas no rompe la consulta ni inyecta SQL."""
-    seed_logs(paths["db_path"])
-    hostile = "x') OR ('1'='1"
-    assert queries.get_logs(levels=[hostile], db_path=paths["db_path"]).empty
-    assert queries.get_logs(hostile, db_path=paths["db_path"]).empty
+def test_filters_are_values_not_operators() -> None:
+    """Un valor con comillas u operadores de Mongo se trata como texto, sin inyectar."""
+    seed_logs()
+    for hostile in ("x') OR ('1'='1", "$ne", '{"$gt": ""}'):
+        assert queries.get_logs(levels=[hostile]).empty
+        assert queries.get_logs(hostile).empty
 
 
 @pytest.fixture(scope="module")
@@ -386,13 +419,15 @@ def test_prediction_step_follows_the_saved_predictions(tmp_path: Path) -> None:
             run_id, models_dir=models_dir, scenarios=("A",), model_names=LR, **paths
         )
         assert queries.has_predictions(run_id, paths["unstructured_path"]) is False
-        assert queries.run_steps(run_id, **paths)["Predicción"] is False
+        assert (
+            queries.run_steps(run_id, paths["unstructured_path"])["Predicción"] is False
+        )
         predict.predict_next_month(run_id, 15.0, models_dir=models_dir, **paths)
     finally:
         root.handlers[:] = saved_handlers
         root.setLevel(saved_level)
     assert queries.has_predictions(run_id, paths["unstructured_path"]) is True
-    assert queries.run_steps(run_id, **paths) == {
+    assert queries.run_steps(run_id, paths["unstructured_path"]) == {
         "ETL": True,
         "Entrenamiento": True,
         "Predicción": True,

@@ -171,7 +171,7 @@ def save_report(
     """
     db_path = paths.get("db_path")
     db.init_structured_db(db_path)
-    logger.setup_logging(db_path)
+    logger.setup_logging()
     token = logger.current_run_id.set(run_id)
     try:
         return _generate_and_write(
@@ -179,6 +179,7 @@ def save_report(
         )
     finally:
         logger.current_run_id.reset(token)
+        logger.flush_logs()
         db.checkpoint(db_path)
 
 

@@ -172,9 +172,6 @@ SELECT r.run_id, r.status, m.scenario, m.model,
 FROM runs r
 JOIN unstructured.resultados_modelos m ON m.run_id = r.run_id
 WHERE r.run_id = '<RUN_ID>';
-
--- En structured.db: cantidad de eventos de una corrida por nivel
-SELECT level, COUNT(*) FROM logs WHERE run_id = '<RUN_ID>' GROUP BY level;
 ```
 
 Los `run_id` disponibles salen de `SELECT run_id, started_at, status FROM runs;`.

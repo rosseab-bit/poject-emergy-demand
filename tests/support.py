@@ -12,11 +12,12 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
+import mongomock
 import pandas as pd
 import pytest
 from streamlit.testing.v1 import AppTest
 
-from src import config, data, features, logger, models
+from src import config, data, features, logger, models, mongo
 
 APP_PATH = config.ROOT_DIR / "app.py"
 
@@ -47,6 +48,40 @@ def isolated_logging() -> Iterator[None]:
     finally:
         root.setLevel(saved_level)
         root.handlers[:] = saved_handlers
+
+
+@contextmanager
+def isolated_mongo() -> Iterator[mongomock.MongoClient]:
+    """Un MongoDB simulado propio para una fixture de módulo o de sesión.
+
+    Esas fixtures corren fuera del alcance de la fixture automática de cada test
+    y no deben llegar al cluster real. Al salir se restaura el cliente anterior
+    sin cerrarlo; la fixture devuelve el suyo (``"mongo"``) para que los tests
+    que la usan lo activen.
+    """
+    client = mongomock.MongoClient()
+    previous = mongo.use_client(client, "demanda_test")
+    try:
+        yield client
+    finally:
+        mongo.restore_client(previous)
+
+
+def mongo_logs(run_id: str | None = None, **filters: object) -> list[dict]:
+    """Eventos de ``logs`` de la base compartida, en orden cronológico.
+
+    Args:
+        run_id: si se indica, solo los de esa corrida.
+        **filters: otros campos del documento a igualar (``level="ERROR"``).
+    """
+    query = {**filters} if run_id is None else {"run_id": run_id, **filters}
+    cursor = mongo.get_database()[mongo.LOGS].find(query).sort([("ts", 1), ("_id", 1)])
+    return list(cursor)
+
+
+def orphan_logs() -> int:
+    """Cantidad de eventos de ``logs`` sin ``run_id`` en la base compartida."""
+    return mongo.get_database()[mongo.LOGS].count_documents({"run_id": None})
 
 
 @contextmanager
@@ -121,5 +156,5 @@ def user_tables(db_path: Path) -> dict[str, int]:
         conn.close()
 
 
-STRUCTURED_TABLES = {"datos_limpios", "datos_originales", "logs", "runs"}
+STRUCTURED_TABLES = {"datos_limpios", "datos_originales", "runs"}
 UNSTRUCTURED_TABLES = {"configuracion", "predicciones", "resultados_modelos"}

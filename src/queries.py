@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from src import config, data, db, features, logger, models, results
+from src import config, data, db, features, logger, models, mongo, results
 
 STEP_ETL = "ETL"
 STEP_TRAINING = "Entrenamiento"
@@ -18,7 +18,16 @@ STEP_REPORT = "Reporte"
 STEPS = (STEP_ETL, STEP_TRAINING, STEP_PREDICTION, STEP_REPORT)
 
 RUN_COLUMNS = ["run_id", "started_at", "finished_at", "status", "seed", "notes"]
-LOG_COLUMNS = ["id", "ts", "level", "module", "message", "run_id"]
+LOG_COLUMNS = [
+    "ts",
+    "level",
+    "module",
+    "message",
+    "run_id",
+    "step",
+    "event",
+    "duration_ms",
+]
 
 
 def _read(
@@ -62,19 +71,18 @@ def has_report(run_id: str, reports_dir: Path | None = None) -> bool:
 
 def run_steps(
     run_id: str,
-    db_path: Path | None = None,
     unstructured_path: Path | None = None,
     reports_dir: Path | None = None,
 ) -> dict[str, bool]:
     """Indica qué pasos de una corrida están hechos.
 
-    El ETL se deduce de sus eventos en ``logs``, el entrenamiento de los
+    El ETL se deduce de sus eventos en la colección ``logs`` de MongoDB, el
+    entrenamiento de los
     resultados guardados, la predicción de la colección ``predicciones`` y el
     reporte de la existencia del PDF en ``reports/``.
 
     Args:
         run_id: identificador de la corrida.
-        db_path: ruta de ``structured.db``; por defecto la de ``config``.
         unstructured_path: ruta de ``unstructured.db``; por defecto la de
             ``config``.
         reports_dir: carpeta de los PDF; por defecto ``config.REPORTS_DIR``.
@@ -82,14 +90,12 @@ def run_steps(
     Returns:
         Diccionario paso a ``True`` (hecho) o ``False`` (pendiente).
     """
-    etl = _read(
-        "SELECT 1 FROM logs WHERE run_id = ? AND message LIKE ? LIMIT 1",
-        (run_id, "Tabla datos_limpios guardada%"),
-        db_path,
-        ["x"],
+    etl = mongo.get_database()[mongo.LOGS].find_one(
+        {"run_id": run_id, "message": {"$regex": "^Tabla datos_limpios guardada"}},
+        {"_id": 1},
     )
     return {
-        STEP_ETL: not etl.empty,
+        STEP_ETL: etl is not None,
         STEP_TRAINING: results.has_results(run_id, unstructured_path),
         STEP_PREDICTION: has_predictions(run_id, unstructured_path),
         STEP_REPORT: has_report(run_id, reports_dir),
@@ -139,7 +145,7 @@ def run_summary(
     summary["dataset_sha256"] = _config_value(
         run_id, "$.dataset_sha256", unstructured_path
     )
-    summary["steps"] = run_steps(run_id, db_path, unstructured_path)
+    summary["steps"] = run_steps(run_id, unstructured_path)
     return summary
 
 
@@ -235,47 +241,40 @@ def get_logs(
     run_id: str | None = None,
     levels: list[str] | None = None,
     modules: list[str] | None = None,
-    db_path: Path | None = None,
 ) -> pd.DataFrame:
-    """Devuelve eventos de ``logs`` con filtros opcionales.
+    """Devuelve eventos de la colección ``logs`` de MongoDB, con filtros.
 
     Args:
         run_id: si se indica, solo los eventos de esa corrida.
         levels: niveles a incluir (``INFO``, ``WARNING``, ``ERROR``...).
         modules: módulos a incluir (por ejemplo ``src.train``).
-        db_path: ruta de ``structured.db``; por defecto la de ``config``.
 
     Returns:
-        DataFrame con ``LOG_COLUMNS``, en orden cronológico.
+        DataFrame con ``LOG_COLUMNS``, en orden cronológico. ``step``, ``event``
+        y ``duration_ms`` son nulos en los eventos que no los tienen.
     """
-    conditions, params = [], []
+    query: dict[str, object] = {}
     if run_id is not None:
-        conditions.append("run_id = ?")
-        params.append(run_id)
-    for column, values in (("level", levels), ("module", modules)):
+        query["run_id"] = run_id
+    for field, values in (("level", levels), ("module", modules)):
         if values:
-            conditions.append(f"{column} IN ({', '.join('?' * len(values))})")
-            params.extend(values)
-    where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
-    return _read(
-        f"SELECT {', '.join(LOG_COLUMNS)} FROM logs {where} ORDER BY id",
-        tuple(params),
-        db_path,
-        LOG_COLUMNS,
+            query[field] = {"$in": list(values)}
+    cursor = (
+        mongo.get_database()[mongo.LOGS]
+        .find(query, {"_id": 0})
+        .sort([("ts", 1), ("_id", 1)])
     )
+    return pd.DataFrame(list(cursor), columns=LOG_COLUMNS)
 
 
-def list_log_modules(
-    run_id: str | None = None, db_path: Path | None = None
-) -> list[str]:
+def list_log_modules(run_id: str | None = None) -> list[str]:
     """Lista los módulos que registraron eventos, para el filtro de la página.
 
     Args:
         run_id: si se indica, solo los de esa corrida.
-        db_path: ruta de ``structured.db``; por defecto la de ``config``.
     """
-    logs = get_logs(run_id, db_path=db_path)
-    return sorted(logs["module"].unique().tolist())
+    query = {} if run_id is None else {"run_id": run_id}
+    return sorted(mongo.get_database()[mongo.LOGS].distinct("module", query))
 
 
 def data_overview(db_path: Path | None = None) -> dict[str, object] | None:

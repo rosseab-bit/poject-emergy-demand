@@ -237,11 +237,31 @@ def get_database() -> Database:
     return client[_Connection.db_name]
 
 
-def use_client(client: MongoClient, db_name: str | None = None) -> None:
-    """Fija el cliente compartido (para pruebas, por ejemplo con ``mongomock``)."""
+class ClientState(NamedTuple):
+    """El cliente compartido y el nombre de su base, para poder restaurarlos."""
+
+    client: MongoClient | None
+    db_name: str
+
+
+def use_client(client: MongoClient, db_name: str | None = None) -> ClientState:
+    """Fija el cliente compartido (para pruebas, por ejemplo con ``mongomock``).
+
+    Returns:
+        El estado anterior, para devolverlo con ``restore_client``.
+    """
     with _Connection.lock:
+        previous = ClientState(_Connection.client, _Connection.db_name)
         _Connection.client = client
         _Connection.db_name = db_name or config.MONGO_DB_NAME
+        return previous
+
+
+def restore_client(state: ClientState) -> None:
+    """Vuelve a un estado guardado, sin cerrar el cliente que se deja."""
+    with _Connection.lock:
+        _Connection.client = state.client
+        _Connection.db_name = state.db_name
 
 
 def reset_client() -> None:

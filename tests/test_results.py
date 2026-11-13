@@ -298,22 +298,16 @@ def test_cross_query_with_attach_database(
     run_id = db.create_run(db_path=sdb)
     with db.get_connection(sdb) as conn:
         conn.execute("UPDATE runs SET run_id = 'run1' WHERE run_id = ?", (run_id,))
-        conn.execute(
-            "INSERT INTO logs (ts, level, module, message, run_id) "
-            "VALUES ('t', 'INFO', 'src.train', 'Resultado A/logistic_regression', 'run1')"
-        )
         db.attach_unstructured(conn, udb_path)
         row = conn.execute(
             "SELECT r.status, r.seed, m.model, "
-            "json_extract(m.doc, '$.holdout.f1') AS f1, "
-            "(SELECT COUNT(*) FROM logs l WHERE l.run_id = r.run_id) AS n_logs "
+            "json_extract(m.doc, '$.holdout.f1') AS f1 "
             "FROM runs r JOIN unstructured.resultados_modelos m ON m.run_id = r.run_id"
         ).fetchone()
     assert row["status"] == "running"
     assert row["seed"] == config.SEED
     assert row["model"] == "logistic_regression"
     assert 0.0 <= row["f1"] <= 1.0
-    assert row["n_logs"] == 1
 
 
 def test_build_run_config_uses_the_given_seed() -> None:

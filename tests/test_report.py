@@ -3,7 +3,6 @@
 import dataclasses
 import json
 import re
-import sqlite3
 import subprocess
 import sys
 from pathlib import Path
@@ -12,7 +11,6 @@ import pytest
 from matplotlib.figure import Figure
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import cm
-from support import main_file_only
 
 from src import (
     config,
@@ -370,30 +368,24 @@ def test_save_report_logs_the_event_under_the_run(tmp_path: Path) -> None:
         return b"%PDF-" + b"x" * 3000
 
     report.save_report("r9", False, tmp_path, fake, db_path=db_path)
-    logs = queries.get_logs("r9", db_path=db_path)
+    logs = queries.get_logs("r9")
     messages = logs["message"].tolist()
     assert messages[0] == "Inicio: _generate_and_write"
     assert "Reporte generado: reporte_r9.pdf (2 KB, predicciones omitidas)" in messages
     assert messages[-1].startswith("Fin: _generate_and_write")
-    assert queries.get_logs(db_path=db_path)["run_id"].isna().sum() == 0
+    assert set(logs["step"].dropna()) == {"_generate_and_write"}
+    assert queries.get_logs()["run_id"].isna().sum() == 0
 
 
-def test_save_report_leaves_its_log_event_in_the_main_database_file(
-    tmp_path: Path,
-) -> None:
-    """El evento del reporte ya está en el .db principal (sin depender del -wal)."""
+def test_save_report_sends_its_log_events_before_returning(tmp_path: Path) -> None:
+    """Al volver de guardar el reporte, sus eventos ya están en MongoDB (no en un lote)."""
     db_path = tmp_path / "structured.db"
 
     def fake(run_id, include_predictions, **paths):
         return b"%PDF-" + b"x" * 100
 
     report.save_report("r5", True, tmp_path, fake, db_path=db_path)
-    copy = main_file_only(db_path, tmp_path / "copia")
-    conn = sqlite3.connect(copy)
-    try:
-        messages = [r[0] for r in conn.execute("SELECT message FROM logs")]
-    finally:
-        conn.close()
+    messages = queries.get_logs("r5")["message"].tolist()
     assert any(m.startswith("Reporte generado: reporte_r5.pdf") for m in messages)
 
 
@@ -406,7 +398,7 @@ def test_failed_report_is_logged_as_error_and_leaves_no_file(tmp_path: Path) -> 
 
     with pytest.raises(RuntimeError, match="no se pudo armar"):
         report.save_report("r9", True, tmp_path, boom, db_path=db_path)
-    errors = queries.get_logs("r9", levels=["ERROR"], db_path=db_path)
+    errors = queries.get_logs("r9", levels=["ERROR"])
     assert errors["message"].str.contains("no se pudo armar").any()
     assert not report.report_exists("r9", tmp_path)
 
@@ -422,7 +414,7 @@ def test_report_naming_is_defined_once_in_queries(tmp_path: Path) -> None:
 
 def test_report_step_follows_the_pdf_on_disk(tmp_path: Path) -> None:
     """El paso Reporte de la corrida está hecho solo si existe su PDF."""
-    paths = {"db_path": tmp_path / "s.db", "unstructured_path": tmp_path / "u.db"}
+    paths = {"unstructured_path": tmp_path / "u.db"}
     assert queries.run_steps("r1", reports_dir=tmp_path, **paths)["Reporte"] is False
     (tmp_path / "reporte_r1.pdf").write_bytes(b"%PDF-")
     assert queries.run_steps("r1", reports_dir=tmp_path, **paths)["Reporte"] is True

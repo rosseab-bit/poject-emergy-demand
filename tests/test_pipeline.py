@@ -3,7 +3,7 @@
 from pathlib import Path
 
 import pytest
-from support import count_rows, main_file_only
+from support import count_rows, main_file_only, mongo_logs, orphan_logs
 
 from src import config, data, db, pipeline, queries, results, train
 
@@ -24,10 +24,7 @@ def test_run_etl_end_to_end(tmp_path: Path) -> None:
     assert run["status"] == "ok"
     assert run["finished_at"] is not None
 
-    with db.get_connection(db_path) as conn:
-        rows = conn.execute(
-            "SELECT level, module, message FROM logs WHERE run_id = ?", (run_id,)
-        ).fetchall()
+    rows = mongo_logs(run_id)
     messages = " | ".join(r["message"] for r in rows)
     for expected in (
         "Inicio: load_raw",
@@ -41,9 +38,24 @@ def test_run_etl_end_to_end(tmp_path: Path) -> None:
         assert expected in messages
     assert sum(r["level"] == "WARNING" for r in rows) == 2
     assert not any(r["level"] == "ERROR" for r in rows)
-    with db.get_connection(db_path) as conn:
-        orphans = conn.execute("SELECT COUNT(*) FROM logs WHERE run_id IS NULL")
-        assert orphans.fetchone()[0] == 0
+    # El último evento ocurre fuera de todo paso: sale al cerrar la corrida.
+    assert rows[-1]["message"] == f"Corrida terminada: run_id={run_id}"
+    assert orphan_logs() == 0
+
+
+def test_run_etl_events_are_differentiated_by_step(tmp_path: Path) -> None:
+    """Los eventos del ETL dicen a qué paso pertenecen, con inicio, fin y duración."""
+    run_id = pipeline.run_etl(db_path=tmp_path / "structured.db")
+    rows = mongo_logs(run_id)
+    steps = {r["step"] for r in rows if "step" in r}
+    assert {"run_etl_steps", "load_raw", "save_raw_data", "save_clean_data"} <= steps
+    inside = [r for r in rows if r["message"].startswith("CSV leído")]
+    assert inside[0]["step"] == "load_raw"  # un evento común, etiquetado con su paso
+    starts = [r for r in rows if r.get("event") == "inicio"]
+    ends = [r for r in rows if r.get("event") == "fin"]
+    assert len(starts) == len(ends) > 5
+    assert all(isinstance(r["duration_ms"], int) for r in ends)
+    assert all("duration_ms" not in r for r in starts)
 
 
 def test_run_etl_failure_is_logged_and_run_marked_error(tmp_path: Path) -> None:
@@ -56,12 +68,10 @@ def test_run_etl_failure_is_logged_and_run_marked_error(tmp_path: Path) -> None:
 
     with db.get_connection(db_path) as conn:
         run = conn.execute("SELECT run_id, status FROM runs").fetchone()
-        errors = conn.execute(
-            "SELECT message FROM logs WHERE level = 'ERROR' AND run_id = ?",
-            (run["run_id"],),
-        ).fetchall()
+    errors = mongo_logs(run["run_id"], level="ERROR")
     assert run["status"] == "error"
     assert len(errors) >= 1
+    assert {e["event"] for e in errors if "event" in e} == {"error"}
 
 
 # Grilla completa de hiperparámetros: es el test de integración real.
@@ -75,12 +85,9 @@ def test_run_pipeline_trains_saves_and_links_everything(tmp_path: Path) -> None:
     )
 
     assert db.get_run(run_id, db_path)["status"] == "ok"
+    rows = mongo_logs(run_id)
+    assert orphan_logs() == 0
     with db.get_connection(db_path) as conn:
-        rows = conn.execute(
-            "SELECT level, message FROM logs WHERE run_id = ?", (run_id,)
-        ).fetchall()
-        orphans = conn.execute("SELECT COUNT(*) FROM logs WHERE run_id IS NULL")
-        assert orphans.fetchone()[0] == 0
         db.attach_unstructured(conn, udb_path)
         joined = conn.execute(
             "SELECT m.scenario, m.model, json_extract(m.doc, '$.holdout.f1') AS f1 "
@@ -156,16 +163,8 @@ def test_training_continues_the_etl_run(paths: dict) -> None:
 
     with db.get_connection(paths["db_path"]) as conn:
         assert conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0] == 1
-        messages = [
-            r["message"]
-            for r in conn.execute(
-                "SELECT message FROM logs WHERE run_id = ?", (run_id,)
-            )
-        ]
-        assert (
-            conn.execute("SELECT COUNT(*) FROM logs WHERE run_id IS NULL").fetchone()[0]
-            == 0
-        )
+    messages = [e["message"] for e in mongo_logs(run_id)]
+    assert orphan_logs() == 0
     assert any("datos_limpios guardada" in m for m in messages)  # ETL
     assert any("Resultado guardado: A/logistic_regression" in m for m in messages)
     run = db.get_run(run_id, paths["db_path"])
@@ -190,9 +189,8 @@ def test_a_finished_run_leaves_both_database_files_complete(
     run_id = pipeline.run_etl(db_path=paths["db_path"], seed=7)
     etl_copy = main_file_only(paths["db_path"], tmp_path / "tras_etl")
     assert count_rows(etl_copy, "datos_limpios") == 308
-    assert count_rows(etl_copy, "logs") == len(
-        queries.get_logs(db_path=paths["db_path"])
-    )
+    assert count_rows(etl_copy, "datos_originales") == 308
+    assert len(queries.get_logs(run_id)) > 0  # los logs ya están en MongoDB
 
     pipeline.run_training(
         run_id, scenarios=("A",), model_names=("logistic_regression",), **paths
@@ -200,9 +198,6 @@ def test_a_finished_run_leaves_both_database_files_complete(
     structured = main_file_only(paths["db_path"], tmp_path / "tras_entrenar")
     unstructured = main_file_only(
         paths["unstructured_path"], tmp_path / "tras_entrenar"
-    )
-    assert count_rows(structured, "logs") == len(
-        queries.get_logs(db_path=paths["db_path"])
     )
     assert count_rows(structured, "runs") == 1
     assert count_rows(unstructured, "resultados_modelos") == 1
@@ -245,8 +240,4 @@ def test_failed_training_marks_run_as_error(
     with pytest.raises(RuntimeError, match="falla de prueba"):
         pipeline.run_training(run_id, scenarios=("A",), model_names=LR, **paths)
     assert db.get_run(run_id, paths["db_path"])["status"] == "error"
-    with db.get_connection(paths["db_path"]) as conn:
-        errors = conn.execute(
-            "SELECT COUNT(*) FROM logs WHERE level = 'ERROR' AND run_id = ?", (run_id,)
-        ).fetchone()[0]
-    assert errors >= 1
+    assert len(mongo_logs(run_id, level="ERROR")) >= 1

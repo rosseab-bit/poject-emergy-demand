@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 
 import pytest
-from support import isolated_logging, tiny_grids
+from support import isolated_logging, isolated_mongo, tiny_grids
 
 from src import (
     config,
@@ -38,7 +38,7 @@ def report_run(tmp_path_factory: pytest.TempPathFactory) -> dict:
         "unstructured_path": base / "unstructured.db",
         "models_dir": base / "models",
     }
-    with isolated_logging(), tiny_grids():
+    with isolated_logging(), isolated_mongo() as client, tiny_grids():
         run_id = pipeline.run_etl(db_path=paths["db_path"], seed=7)
         pipeline.run_training(
             run_id,
@@ -50,7 +50,7 @@ def report_run(tmp_path_factory: pytest.TempPathFactory) -> dict:
         predict.predict_next_month(run_id, 12.0, **paths)
         predict.predict_next_month(run_id, 20.0, **paths)
         etl_only = pipeline.run_etl(db_path=paths["db_path"])
-    return {"run_id": run_id, "etl_only": etl_only, **paths}
+    return {"run_id": run_id, "etl_only": etl_only, "mongo": client, **paths}
 
 
 def collect(run: dict, **kwargs) -> report_data.ReportData:
@@ -176,14 +176,15 @@ def test_unreadable_model_is_reported_as_a_note_not_a_crash(
 
 
 def test_collecting_adds_no_events_to_logs(report_run: dict) -> None:
-    """Armar los datos del reporte no escribe en la tabla logs."""
+    """Armar los datos del reporte no escribe en la colección logs."""
     root = logging.getLogger(logger.ROOT_LOGGER_NAME)
     saved_level, saved_handlers = root.level, list(root.handlers)
     try:
-        logger.setup_logging(report_run["db_path"])
-        before = len(queries.get_logs(db_path=report_run["db_path"]))
+        logger.setup_logging()
+        before = len(queries.get_logs())
         collect(report_run)
-        assert len(queries.get_logs(db_path=report_run["db_path"])) == before
+        logger.flush_logs()  # si hubiera algo pendiente, saldría acá
+        assert len(queries.get_logs()) == before
     finally:
         root.setLevel(saved_level)
         root.handlers[:] = saved_handlers

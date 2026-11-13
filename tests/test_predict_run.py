@@ -8,7 +8,14 @@ import sys
 from pathlib import Path
 
 import pytest
-from support import count_rows, isolated_logging, main_file_only, tiny_grids
+from support import (
+    count_rows,
+    isolated_logging,
+    isolated_mongo,
+    main_file_only,
+    mongo_logs,
+    tiny_grids,
+)
 
 from src import config, data, db, logger, pipeline, predict, queries, results
 
@@ -29,7 +36,7 @@ def predict_run(tmp_path_factory: pytest.TempPathFactory) -> dict:
         "unstructured_path": base / "unstructured.db",
         "models_dir": base / "models",
     }
-    with isolated_logging(), tiny_grids():
+    with isolated_logging(), isolated_mongo() as client, tiny_grids():
         run_id = pipeline.run_etl(db_path=paths["db_path"], seed=7)
         pipeline.run_training(
             run_id,
@@ -40,7 +47,7 @@ def predict_run(tmp_path_factory: pytest.TempPathFactory) -> dict:
             model_names=(LR, RF),
         )
         etl_only = pipeline.run_etl(db_path=paths["db_path"])
-    return {"run_id": run_id, "etl_only": etl_only, **paths}
+    return {"run_id": run_id, "etl_only": etl_only, "mongo": client, **paths}
 
 
 @pytest.fixture
@@ -182,21 +189,18 @@ def test_the_expected_temperature_changes_the_prediction(predict_run: dict) -> N
 @pytest.mark.usefixtures("use_logging")
 def test_prediction_events_are_logged_under_the_run(predict_run: dict) -> None:
     """Inicio, guardado y fin quedan en logs con el run_id, sin eventos huérfanos."""
-    with db.get_connection(predict_run["db_path"]) as conn:
-        before = conn.execute("SELECT MAX(id) FROM logs").fetchone()[0]
+    before = len(mongo_logs())
     doc = predict.predict_next_month(
         predict_run["run_id"], 15.0, **only_paths(predict_run)
     )
-    with db.get_connection(predict_run["db_path"]) as conn:
-        rows = conn.execute(
-            "SELECT level, message, run_id FROM logs WHERE id > ?", (before,)
-        ).fetchall()
+    rows = mongo_logs()[before:]  # ya salieron todos: se envían al cerrar la predicción
     messages = [r["message"] for r in rows]
     assert {r["run_id"] for r in rows} == {predict_run["run_id"]}
     assert any(m.startswith(f"Predicción guardada (id {doc['id']})") for m in messages)
     assert messages[0] == "Inicio: _predict_and_save"
     assert messages[-1].startswith("Fin: _predict_and_save")
     assert not any(r["level"] == "ERROR" for r in rows)
+    assert {r["step"] for r in rows if "step" in r} >= {"_predict_and_save"}
 
 
 @pytest.mark.usefixtures("use_logging")
@@ -219,9 +223,7 @@ def test_invalid_temperature_saves_nothing_and_logs_the_error(
         )
     )
     assert after == before
-    errors = queries.get_logs(
-        predict_run["run_id"], levels=["ERROR"], db_path=predict_run["db_path"]
-    )
+    errors = queries.get_logs(predict_run["run_id"], levels=["ERROR"])
     assert errors["message"].str.contains("temperatura").any()
 
 
@@ -246,9 +248,7 @@ def test_prediction_leaves_the_database_files_complete(
     unstructured = main_file_only(predict_run["unstructured_path"], tmp_path)
     structured = main_file_only(predict_run["db_path"], tmp_path)
     assert count_rows(unstructured, "predicciones") == saved
-    assert count_rows(structured, "logs") == len(
-        queries.get_logs(db_path=predict_run["db_path"])
-    )
+    assert count_rows(structured, "runs") >= 1
 
 
 def test_prediction_works_in_a_fresh_process(predict_run: dict) -> None:

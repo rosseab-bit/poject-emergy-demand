@@ -23,17 +23,6 @@ CREATE TABLE IF NOT EXISTS runs (
     notes       TEXT
 );
 
-CREATE TABLE IF NOT EXISTS logs (
-    id        INTEGER PRIMARY KEY AUTOINCREMENT,
-    ts        TEXT NOT NULL,
-    level     TEXT NOT NULL,
-    module    TEXT NOT NULL,
-    message   TEXT NOT NULL,
-    run_id    TEXT
-);
-
-CREATE INDEX IF NOT EXISTS idx_logs_run_id ON logs (run_id);
-
 CREATE TABLE IF NOT EXISTS datos_limpios (
     fecha                TEXT PRIMARY KEY,
     demanda_total        REAL NOT NULL,
@@ -189,7 +178,7 @@ def checkpoint_all(
 
 
 def init_structured_db(db_path: Path | None = None) -> None:
-    """Crea ``runs``, ``logs``, ``datos_originales`` y ``datos_limpios`` si faltan.
+    """Crea ``runs``, ``datos_originales`` y ``datos_limpios`` si faltan.
 
     Args:
         db_path: ruta de la base; por defecto ``structured.db``.

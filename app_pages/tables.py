@@ -45,9 +45,12 @@ def logs_for_display(logs: pd.DataFrame) -> pd.DataFrame:
     """Tabla de eventos con nombres de columna y niveles con ícono."""
     return pd.DataFrame(
         {
-            "Fecha (UTC)": logs["ts"],
+            "Fecha (UTC)": logs["ts"].dt.strftime("%Y-%m-%d %H:%M:%S"),
             "Nivel": logs["level"].map(lambda v: with_icon(v, LEVEL_ICONS)),
             "Módulo": logs["module"],
+            "Paso": logs["step"],
+            "Evento": logs["event"],
+            "Duración (s)": (logs["duration_ms"] / 1000).round(2),
             "Mensaje": logs["message"],
             "Corrida": logs["run_id"],
         }

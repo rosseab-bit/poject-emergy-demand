@@ -23,14 +23,15 @@ def db_path(tmp_path: Path) -> Path:
 
 
 def test_init_creates_tables(db_path: Path) -> None:
-    """init_structured_db crea runs y logs."""
+    """init_structured_db crea runs y los dos datasets, y ya no crea logs (van a MongoDB)."""
     db.init_structured_db(db_path)
     with db.get_connection(db_path) as conn:
         rows = conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table'"
         ).fetchall()
     names = {r["name"] for r in rows}
-    assert {"runs", "logs"} <= names
+    assert {"runs", "datos_originales", "datos_limpios"} <= names
+    assert "logs" not in names
 
 
 def test_init_is_idempotent(db_path: Path) -> None:
@@ -274,14 +275,14 @@ def test_init_adds_predicciones_to_an_old_database_without_losing_data(
     assert kept == 0.5
 
 
-def write_events(path: Path, n: int) -> None:
-    """Escribe n eventos de log, cada uno con su propia conexión (como el logger)."""
-    for i in range(n):
+def write_events(path: Path, n: int, start: int = 0) -> None:
+    """Escribe n filas en ``datos_originales``, cada una con su propia conexión."""
+    for i in range(start, start + n):
         with db.get_connection(path) as conn:
             conn.execute(
-                "INSERT INTO logs (ts, level, module, message, run_id) "
-                "VALUES ('t', 'INFO', 'm', ?, 'r1')",
-                (f"evento {i}",),
+                "INSERT INTO datos_originales (indice_tiempo, demanda_total) "
+                "VALUES (?, ?)",
+                (f"mes {i:03d}", float(i)),
             )
 
 
@@ -301,9 +302,11 @@ def test_events_from_many_short_connections_are_all_readable(db_path: Path) -> N
     db.init_structured_db(db_path)
     write_events(db_path, 25)
     with db.get_connection(db_path) as conn:
-        assert conn.execute("SELECT COUNT(*) FROM logs").fetchone()[0] == 25
-        last = conn.execute("SELECT message FROM logs ORDER BY id DESC").fetchone()
-    assert last[0] == "evento 24"
+        assert conn.execute("SELECT COUNT(*) FROM datos_originales").fetchone()[0] == 25
+        last = conn.execute(
+            "SELECT indice_tiempo FROM datos_originales ORDER BY demanda_total DESC"
+        ).fetchone()
+    assert last[0] == "mes 024"
 
 
 def test_main_file_alone_is_incomplete_until_the_checkpoint(
@@ -313,11 +316,13 @@ def test_main_file_alone_is_incomplete_until_the_checkpoint(
     db.init_structured_db(db_path)
     write_events(db_path, 10)
     before = main_file_only(db_path, tmp_path / "antes")
-    assert (count_rows(before, "logs") or 0) < 10  # lo reciente vive en el -wal
+    assert (
+        count_rows(before, "datos_originales") or 0
+    ) < 10  # lo reciente vive en el -wal
 
     assert db.checkpoint(db_path) is True
     after = main_file_only(db_path, tmp_path / "despues")
-    assert count_rows(after, "logs") == 10
+    assert count_rows(after, "datos_originales") == 10
     wal = Path(f"{db_path}-wal")
     assert not wal.exists() or wal.stat().st_size == 0
 
@@ -327,9 +332,9 @@ def test_checkpoint_keeps_the_data_and_the_database_usable(db_path: Path) -> Non
     db.init_structured_db(db_path)
     write_events(db_path, 5)
     assert db.checkpoint(db_path) is True
-    write_events(db_path, 3)
+    write_events(db_path, 3, start=5)
     with db.get_connection(db_path) as conn:
-        assert conn.execute("SELECT COUNT(*) FROM logs").fetchone()[0] == 8
+        assert conn.execute("SELECT COUNT(*) FROM datos_originales").fetchone()[0] == 8
         assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
 
 
@@ -350,7 +355,9 @@ def test_checkpoint_all_flushes_both_databases(tmp_path: Path) -> None:
     write_events(structured, 4)
     insert_prediction(unstructured, "r1", '{"a": 1}')
     assert db.checkpoint_all(structured, unstructured) is True
-    assert count_rows(main_file_only(structured, tmp_path / "c"), "logs") == 4
+    assert (
+        count_rows(main_file_only(structured, tmp_path / "c"), "datos_originales") == 4
+    )
     assert count_rows(main_file_only(unstructured, tmp_path / "c"), "predicciones") == 1
 
 
@@ -362,18 +369,24 @@ def test_checkpoint_is_best_effort_when_another_reader_holds_the_database(
     write_events(db_path, 3)
     reader = sqlite3.connect(db_path)
     reader.execute("BEGIN")
-    reader.execute("SELECT * FROM logs").fetchone()  # fija una vista de la base
+    reader.execute(
+        "SELECT * FROM datos_originales"
+    ).fetchone()  # fija una vista de la base
     try:
-        write_events(db_path, 3)
+        write_events(db_path, 3, start=3)
         started = time.perf_counter()
         assert db.checkpoint(db_path, timeout=0.2) is False
         assert time.perf_counter() - started < 5
         with db.get_connection(db_path) as conn:
-            assert conn.execute("SELECT COUNT(*) FROM logs").fetchone()[0] == 6
+            assert (
+                conn.execute("SELECT COUNT(*) FROM datos_originales").fetchone()[0] == 6
+            )
     finally:
         reader.close()
     assert db.checkpoint(db_path) is True
-    assert count_rows(main_file_only(db_path, tmp_path / "final"), "logs") == 6
+    assert (
+        count_rows(main_file_only(db_path, tmp_path / "final"), "datos_originales") == 6
+    )
 
 
 def test_rollback_still_discards_the_write_with_the_new_settings(db_path: Path) -> None:
@@ -381,12 +394,12 @@ def test_rollback_still_discards_the_write_with_the_new_settings(db_path: Path) 
     db.init_structured_db(db_path)
     with pytest.raises(RuntimeError), db.get_connection(db_path) as conn:
         conn.execute(
-            "INSERT INTO logs (ts, level, module, message, run_id) "
-            "VALUES ('t', 'INFO', 'm', 'x', 'r1')"
+            "INSERT INTO datos_originales (indice_tiempo, demanda_total) "
+            "VALUES ('x', 1.0)"
         )
         raise RuntimeError("falla")
     assert db.checkpoint(db_path) is True
-    assert count_rows(db_path, "logs") == 0
+    assert count_rows(db_path, "datos_originales") == 0
 
 
 def test_checkpoint_of_an_unreadable_file_is_best_effort(tmp_path: Path) -> None:

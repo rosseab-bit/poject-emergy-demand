@@ -280,7 +280,7 @@ def predict_next_month(
     db.init_structured_db(db_path)
     if db.get_run(run_id, db_path) is None:
         raise ValueError(f"No existe la corrida {run_id}")
-    logger.setup_logging(db_path)
+    logger.setup_logging()
     token = logger.current_run_id.set(run_id)
     try:
         return _predict_and_save(
@@ -288,4 +288,5 @@ def predict_next_month(
         )
     finally:
         logger.current_run_id.reset(token)
+        logger.flush_logs()
         db.checkpoint_all(db_path, unstructured_path)

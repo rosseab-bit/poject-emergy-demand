@@ -5,13 +5,15 @@ Se omiten salvo que se pidan con ``pytest -m mongo``, y también si no hay un
 ``<MONGODB_DB>_tests``, que se borra al terminar.
 """
 
+import logging
+import time
 import uuid
 from collections.abc import Iterator
 
 import pytest
 from pymongo.collection import Collection
 
-from src import mongo
+from src import logger, mongo
 
 pytestmark = pytest.mark.mongo
 
@@ -48,3 +50,28 @@ def test_user_can_write_read_and_delete(temp_collection: Collection) -> None:
     found = temp_collection.find_one({"_id": inserted.inserted_id})
     assert found is not None and found["valor"] == 1
     assert temp_collection.delete_one({"_id": inserted.inserted_id}).deleted_count == 1
+
+
+def test_logger_batch_roundtrip_on_the_real_cluster(
+    temp_collection: Collection,
+) -> None:
+    """Un lote de eventos viaja en una operación y se lee igual que se guardó."""
+    handler = logger.MongoHandler(temp_collection)
+    test_logger = logging.getLogger("src.integration_probe")
+    test_logger.setLevel(logging.INFO)
+    test_logger.addHandler(handler)
+    token = logger.current_run_id.set("integracion")
+    try:
+        for index in range(50):
+            test_logger.info("evento %d", index, extra={"step": "paso", "event": "fin"})
+        started = time.perf_counter()
+        handler.flush()
+        elapsed = time.perf_counter() - started
+    finally:
+        logger.current_run_id.reset(token)
+        test_logger.removeHandler(handler)
+    docs = list(temp_collection.find({"run_id": "integracion"}).sort("_id", 1))
+    assert [d["message"] for d in docs] == [f"evento {i}" for i in range(50)]
+    assert {d["step"] for d in docs} == {"paso"}
+    assert docs[0]["ts"].year >= 2026  # datetime guardado como fecha, no como texto
+    assert elapsed < 5  # 50 eventos en un solo viaje, no 50 viajes

@@ -234,3 +234,21 @@ def test_redact_with_a_password_free_uri(
     """Una URI sin clave no rompe la limpieza del mensaje."""
     env_file.write_text("URI=mongodb://localhost:27017\n", encoding="utf-8")
     assert mongo._redact("falló localhost") == "falló localhost"
+
+
+def test_reset_client_without_a_client_is_harmless() -> None:
+    """Reiniciar dos veces seguidas no falla: no hay nada que cerrar."""
+    mongo.reset_client()
+    mongo.reset_client()
+    assert mongo._Connection.client is None
+
+
+def test_restore_client_brings_back_the_previous_state(
+    mongo_db: mongomock.Database,
+) -> None:
+    """``use_client`` devuelve el estado anterior y ``restore_client`` lo recupera."""
+    other = mongomock.MongoClient()
+    previous = mongo.use_client(other, "otra")
+    assert mongo.get_database().name == "otra"
+    mongo.restore_client(previous)
+    assert mongo.get_database().name == "demanda_test"

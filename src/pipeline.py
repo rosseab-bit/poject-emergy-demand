@@ -63,7 +63,7 @@ def _run_registered(
     unstructured_path: Path | None = None,
     with_unstructured: bool = False,
 ) -> str:
-    """Ejecuta ``steps`` como una corrida registrada en ``runs`` y ``logs``.
+    """Ejecuta ``steps`` como una corrida registrada en ``runs`` y en ``logs``.
 
     Crea el ``run_id`` (o continúa el que se pasa), lo deja activo para el
     logger y cierra la corrida con estado ``ok`` o ``error`` (relanzando el
@@ -71,7 +71,7 @@ def _run_registered(
     ``.db`` quedan completos por sí solos; ``with_unstructured`` indica si la
     corrida también escribió en ``unstructured.db``.
     """
-    logger.setup_logging(db_path)
+    logger.setup_logging()
     db.init_structured_db(db_path)
     if run_id is None:
         run_id = db.create_run(seed=seed, db_path=db_path)
@@ -85,6 +85,7 @@ def _run_registered(
         raise
     finally:
         logger.current_run_id.reset(token)
+        logger.flush_logs()
         if with_unstructured:
             db.checkpoint_all(db_path, unstructured_path)
         else:

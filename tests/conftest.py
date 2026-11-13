@@ -7,7 +7,7 @@ from pathlib import Path
 import mongomock
 import pytest
 import streamlit as st
-from support import isolated_logging, tiny_grids
+from support import isolated_logging, isolated_mongo, tiny_grids
 
 from src import config, logger, mongo, pipeline
 
@@ -61,18 +61,30 @@ def clean_root_logger() -> Iterator[None]:
     root.handlers[:] = old_handlers
 
 
+# Fixtures de módulo o de sesión que corren el pipeline: cada una trae su propio
+# MongoDB simulado en la clave "mongo" de su diccionario.
+MONGO_FIXTURES = ("trained_run", "predict_run", "report_run", "trained")
+
+
 @pytest.fixture(autouse=True)
-def mongo_db() -> Iterator[mongomock.Database]:
-    """Una base MongoDB simulada en memoria como cliente compartido de CADA test.
+def mongo_db(request: pytest.FixtureRequest) -> Iterator[mongomock.Database]:
+    """Una base MongoDB simulada como cliente compartido de CADA test.
 
     Es automática para que ningún test llegue por accidente al cluster real
-    configurado en el ``.env``. Al terminar olvida el cliente y vacía el caché de
-    Streamlit (la preparación de MongoDB de la app se guarda ahí).
+    configurado en el ``.env``. Si el test usa una fixture de módulo o de sesión
+    que ya corrió el pipeline, se activa el MongoDB simulado de esa fixture, que
+    es donde quedaron sus logs y resultados. Al terminar restaura el cliente
+    anterior y vacía el caché de Streamlit (la preparación de MongoDB de la app
+    se guarda ahí).
     """
     client = mongomock.MongoClient()
-    mongo.use_client(client, "demanda_test")
+    previous = mongo.use_client(client, "demanda_test")
+    for name in MONGO_FIXTURES:
+        if name in request.fixturenames:
+            client = request.getfixturevalue(name)["mongo"]
+            mongo.use_client(client, "demanda_test")
     yield client["demanda_test"]
-    mongo.reset_client()
+    mongo.restore_client(previous)
     st.cache_resource.clear()
 
 
@@ -106,7 +118,7 @@ def trained_run(tmp_path_factory: pytest.TempPathFactory) -> dict:
         "db_path": base / "structured.db",
         "unstructured_path": base / "unstructured.db",
     }
-    with isolated_logging(), tiny_grids():
+    with isolated_logging(), isolated_mongo() as client, tiny_grids():
         run_id = pipeline.run_etl(seed=7, db_path=paths["db_path"])
         pipeline.run_training(
             run_id,
@@ -114,7 +126,7 @@ def trained_run(tmp_path_factory: pytest.TempPathFactory) -> dict:
             model_names=("logistic_regression", "random_forest"),
             **paths,
         )
-    return {"run_id": run_id, "models_dir": base / "models", **paths}
+    return {"run_id": run_id, "models_dir": base / "models", "mongo": client, **paths}
 
 
 @pytest.fixture
