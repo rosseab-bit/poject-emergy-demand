@@ -501,3 +501,17 @@ def test_flush_logs_skips_handlers_that_are_not_ours(
     logging.getLogger("src.test_flush").info("pendiente")
     logger.flush_logs()
     assert mongo_db[mongo.LOGS].count_documents({"message": "pendiente"}) == 1
+
+
+def test_run_context_attaches_the_run_id_and_sends_on_exit(
+    mongo_db: mongomock.Database,
+) -> None:
+    """Dentro del bloque los eventos llevan el run_id, y al salir ya están enviados."""
+    logger.setup_logging()
+    with logger.run_context("abc12345"):
+        logging.getLogger("src.test_context").info("dentro")
+    logging.getLogger("src.test_context").info("fuera")
+    logger.flush_logs()
+    events = {e["message"]: e["run_id"] for e in mongo_db[mongo.LOGS].find()}
+    assert events == {"dentro": "abc12345", "fuera": None}
+    assert logger.current_run_id.get() is None

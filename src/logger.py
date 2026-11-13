@@ -60,6 +60,21 @@ def muted() -> Iterator[None]:
         _muted.reset(token)
 
 
+@contextmanager
+def run_context(run_id: str) -> Iterator[None]:
+    """Deja activo un ``run_id`` dentro del bloque y envía lo pendiente al salir.
+
+    Sirve para registrar un evento que ocurre fuera de una corrida pero le
+    pertenece, como avisar dónde se guardó su reporte.
+    """
+    token = current_run_id.set(run_id)
+    try:
+        yield
+    finally:
+        current_run_id.reset(token)
+        flush_logs()
+
+
 def build_event(record: logging.LogRecord) -> dict:
     """Arma el documento de un evento a partir de un registro de ``logging``.
 

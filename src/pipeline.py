@@ -266,7 +266,9 @@ def main(argv: list[str] | None = None) -> int:
         if args.reporte:
             from src import report  # solo si se pide: carga ReportLab y matplotlib
 
-            log.info("Reporte guardado en %s", report.save_report(run_id))
+            saved = report.save_report(run_id)
+            with logger.run_context(run_id):  # el aviso también es de la corrida
+                log.info("Reporte guardado en %s", saved)
     except Exception as error:  # noqa: BLE001 - el detalle ya quedó en logs
         log.error("La corrida falló: %s: %s", type(error).__name__, error)
         return 1

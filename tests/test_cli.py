@@ -7,9 +7,9 @@ from pathlib import Path
 
 import mongomock
 import pytest
-from support import STRUCTURED_TABLES, user_tables
+from support import STRUCTURED_TABLES, mongo_logs, orphan_logs, user_tables
 
-from src import config, mongo, pipeline, report
+from src import config, logger, mongo, pipeline, report
 
 # main() inicializa las bases: que lo haga en una carpeta temporal, no en db/.
 pytestmark = pytest.mark.usefixtures("tmp_config")
@@ -79,6 +79,15 @@ def test_reporte_generates_the_pdf_of_the_run_after_training(
     assert pipeline.main(["--reporte"]) == 0
     assert recorder.names == ["pipeline", "reporte"]
     assert recorder.calls[1] == ("reporte", "run-falso")
+
+
+def test_the_saved_report_notice_belongs_to_the_run(recorder: Recorder) -> None:
+    """El aviso «Reporte guardado» queda en logs atado a la corrida, no huérfano."""
+    logger.setup_logging()
+    assert pipeline.main(["--reporte"]) == 0
+    messages = [e["message"] for e in mongo_logs("run-falso")]
+    assert any(m.startswith("Reporte guardado en") for m in messages)
+    assert orphan_logs() == 0
 
 
 def test_reporte_without_training_is_rejected(
