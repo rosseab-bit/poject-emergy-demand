@@ -101,7 +101,7 @@ streamlit run app.py
 Se abre en el navegador (por defecto en `http://localhost:8501`). Las páginas se recorren en orden desde la barra lateral:
 
 1. **Datos:** carga y limpieza (ETL) y las tablas resultantes.
-2. **Entrenamiento:** semilla visible y botón para entrenar los tres modelos en los dos escenarios. Con la grilla completa tarda varios minutos.
+2. **Entrenamiento:** semilla visible y botón para entrenar los tres modelos en los dos escenarios. Con la grilla completa tarda menos de un minuto (unos 30 s en una PC de escritorio, ETL y reporte incluidos).
 3. **Comparación:** tabla, matrices de confusión y gráficos de los seis resultados, con la referencia «siempre alta» y la recomendación.
 4. **Predicción:** mes siguiente al último dato, con la temperatura esperada como entrada. Devuelve la probabilidad de demanda alta de cada modelo y la guarda.
 5. **Reporte:** genera y descarga el PDF de la corrida.
