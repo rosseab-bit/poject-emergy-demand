@@ -9,6 +9,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 import sklearn
+from support import real_dataset, tiny_grids
 
 from src import config, data, db, features, models, results, train
 from src.train import ModelRun
@@ -90,8 +91,8 @@ def test_reproducibility_info_has_every_field() -> None:
 @pytest.fixture(scope="module")
 def model_run() -> ModelRun:
     """Un ModelRun real (regresión logística, escenario A), entrenado una vez."""
-    ds = features.build_dataset(data.flag_repeated_power(data.load_raw()))
-    return train.train_model(ds, models.LOGISTIC_REGRESSION, "A")
+    with tiny_grids():
+        return train.train_model(real_dataset(), models.LOGISTIC_REGRESSION, "A")
 
 
 @pytest.fixture

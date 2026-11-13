@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from support import isolated_logging, tiny_grids
 
 from src import (
     config,
@@ -33,9 +34,7 @@ def report_run(tmp_path_factory: pytest.TempPathFactory) -> dict:
         "unstructured_path": base / "unstructured.db",
         "models_dir": base / "models",
     }
-    root = logging.getLogger(logger.ROOT_LOGGER_NAME)
-    saved_level, saved_handlers = root.level, list(root.handlers)
-    try:
+    with isolated_logging(), tiny_grids():
         run_id = pipeline.run_etl(db_path=paths["db_path"], seed=7)
         pipeline.run_training(
             run_id,
@@ -47,9 +46,6 @@ def report_run(tmp_path_factory: pytest.TempPathFactory) -> dict:
         predict.predict_next_month(run_id, 12.0, **paths)
         predict.predict_next_month(run_id, 20.0, **paths)
         etl_only = pipeline.run_etl(db_path=paths["db_path"])
-    finally:
-        root.setLevel(saved_level)
-        root.handlers[:] = saved_handlers
     return {"run_id": run_id, "etl_only": etl_only, **paths}
 
 

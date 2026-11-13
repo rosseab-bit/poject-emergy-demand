@@ -145,7 +145,6 @@ def test_build_input_rejects_bad_history(clean: pd.DataFrame) -> None:
         predict.build_input(clean, 200.0)
 
 
-@pytest.mark.usefixtures("clean_root_logger")
 def test_build_input_adds_no_events_to_logs(
     clean: pd.DataFrame, tmp_path: Path
 ) -> None:

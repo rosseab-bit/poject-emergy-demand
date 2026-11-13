@@ -292,10 +292,17 @@ def test_unsupported_symbols_are_replaced_so_helvetica_can_print_them() -> None:
 
 def test_all_report_text_is_encodable_in_the_pdf_font(trained_report_data) -> None:
     """Todo texto redactado por las reglas se puede imprimir con Helvetica (cp1252)."""
+    texts = list(report_sections.limits(trained_report_data))
     for conclusion in trained_report_data.conclusions.values():
-        texts = [conclusion.explanation.headline, *conclusion.explanation.reasons]
-        for item in [*texts, *report_sections.limits(trained_report_data)]:
-            report_layout.pdf_text(item).encode("cp1252")
+        texts += [conclusion.explanation.headline, *conclusion.explanation.reasons]
+    assert len(texts) > 10  # hay texto que revisar
+    unencodable = []
+    for text in texts:
+        try:
+            report_layout.pdf_text(text).encode("cp1252")
+        except UnicodeEncodeError:
+            unencodable.append(text)
+    assert unencodable == []
 
 
 def test_report_with_a_single_scenario_still_builds(trained_report_data) -> None:
@@ -331,7 +338,6 @@ def test_report_path_and_exists(tmp_path: Path) -> None:
     assert report.report_exists("abc", tmp_path) is False
 
 
-@pytest.mark.usefixtures("clean_root_logger")
 def test_save_report_writes_and_overwrites(tmp_path: Path) -> None:
     """Guardar crea la carpeta y pisa el archivo anterior."""
     calls = []
@@ -351,7 +357,6 @@ def test_save_report_writes_and_overwrites(tmp_path: Path) -> None:
     assert report.report_exists("r1", target) is True
 
 
-@pytest.mark.usefixtures("clean_root_logger")
 def test_save_report_logs_the_event_under_the_run(tmp_path: Path) -> None:
     """Generar el reporte deja inicio, el evento con el archivo y fin, atados al run_id."""
     db_path = tmp_path / "structured.db"
@@ -368,7 +373,6 @@ def test_save_report_logs_the_event_under_the_run(tmp_path: Path) -> None:
     assert queries.get_logs(db_path=db_path)["run_id"].isna().sum() == 0
 
 
-@pytest.mark.usefixtures("clean_root_logger")
 def test_failed_report_is_logged_as_error_and_leaves_no_file(tmp_path: Path) -> None:
     """Si falla la generación, queda el error en logs y no se escribe ningún archivo."""
     db_path = tmp_path / "structured.db"

@@ -64,9 +64,14 @@ def test_handler_failure_does_not_raise(
     def broken(*args, **kwargs):
         raise RuntimeError("base caída")
 
+    failures: list[logging.LogRecord] = []
+    handler = log.handlers[0]
     monkeypatch.setattr(db, "get_connection", broken)
-    monkeypatch.setattr(logging, "raiseExceptions", False)
+    monkeypatch.setattr(handler, "handleError", failures.append)
     log.info("no debe lanzar")
+    log.error("tampoco este")
+    # El fallo se reportó al manejador de errores de logging, no se propagó.
+    assert [r.getMessage() for r in failures] == ["no debe lanzar", "tampoco este"]
 
 
 def test_setup_logging_is_idempotent(db_path: Path) -> None:

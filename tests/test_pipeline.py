@@ -6,8 +6,10 @@ import pytest
 
 from src import config, data, db, pipeline, results, train
 
+# Integración: corre el ETL y el entrenamiento de verdad.
+pytestmark = pytest.mark.slow
 
-@pytest.mark.usefixtures("clean_root_logger")
+
 def test_run_etl_end_to_end(tmp_path: Path) -> None:
     """El ETL deja 308 filas (259 completas) y todo logueado con su run_id."""
     db_path = tmp_path / "structured.db"
@@ -43,7 +45,6 @@ def test_run_etl_end_to_end(tmp_path: Path) -> None:
         assert orphans.fetchone()[0] == 0
 
 
-@pytest.mark.usefixtures("clean_root_logger")
 def test_run_etl_failure_is_logged_and_run_marked_error(tmp_path: Path) -> None:
     """Si el CSV es inválido, la corrida queda en error y el error en logs."""
     db_path = tmp_path / "structured.db"
@@ -62,7 +63,7 @@ def test_run_etl_failure_is_logged_and_run_marked_error(tmp_path: Path) -> None:
     assert len(errors) >= 1
 
 
-@pytest.mark.usefixtures("clean_root_logger")
+# Grilla completa de hiperparámetros: es el test de integración real.
 def test_run_pipeline_trains_saves_and_links_everything(tmp_path: Path) -> None:
     """La corrida completa entrena 6 resultados y los guarda atados al run_id."""
     db_path = tmp_path / "structured.db"
@@ -115,7 +116,6 @@ def test_run_pipeline_trains_saves_and_links_everything(tmp_path: Path) -> None:
         assert results.load_model(doc, models_dir) is not None
 
 
-@pytest.mark.usefixtures("clean_root_logger")
 def test_run_etl_records_the_given_seed(tmp_path: Path) -> None:
     """La semilla elegida queda en la tabla runs."""
     db_path = tmp_path / "structured.db"
@@ -138,7 +138,7 @@ def paths(tmp_path: Path) -> dict:
     }
 
 
-@pytest.mark.usefixtures("clean_root_logger")
+@pytest.mark.usefixtures("small_grids")
 def test_training_continues_the_etl_run(paths: dict) -> None:
     """Entrenar continúa el run_id del ETL: una sola corrida, todo atado a ella."""
     run_id = pipeline.run_etl(db_path=paths["db_path"], seed=7)
@@ -181,7 +181,7 @@ def test_training_continues_the_etl_run(paths: dict) -> None:
     assert seed == 7
 
 
-@pytest.mark.usefixtures("clean_root_logger")
+@pytest.mark.usefixtures("small_grids")
 def test_training_twice_on_same_run_is_rejected(paths: dict) -> None:
     """Una corrida no se entrena dos veces: hay que iniciar otra."""
     run_id = pipeline.run_etl(db_path=paths["db_path"])
@@ -190,7 +190,6 @@ def test_training_twice_on_same_run_is_rejected(paths: dict) -> None:
         pipeline.run_training(run_id, scenarios=("A",), model_names=LR, **paths)
 
 
-@pytest.mark.usefixtures("clean_root_logger")
 def test_training_rejects_unknown_run_and_missing_etl(paths: dict) -> None:
     """Sin corrida o sin ETL previo se pide ejecutar el ETL, sin tocar nada."""
     with pytest.raises(ValueError, match="No existe la corrida"):
@@ -202,7 +201,6 @@ def test_training_rejects_unknown_run_and_missing_etl(paths: dict) -> None:
     assert db.get_run(empty_run, paths["db_path"])["status"] == "running"
 
 
-@pytest.mark.usefixtures("clean_root_logger")
 def test_failed_training_marks_run_as_error(
     paths: dict, monkeypatch: pytest.MonkeyPatch
 ) -> None:

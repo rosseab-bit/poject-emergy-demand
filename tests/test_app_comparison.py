@@ -1,20 +1,15 @@
 """Tests de la página Comparación (AppTest sobre una corrida real entrenada)."""
 
+from functools import partial
 from pathlib import Path
 
 import pytest
-from streamlit.testing.v1 import AppTest
+from support import open_page as open_page_in
 
 from app_pages import comparacion
 from src import config, queries, results
 
-APP_PATH = config.ROOT_DIR / "app.py"
-
-
-def open_page() -> AppTest:
-    """Abre la página Comparación."""
-    at = AppTest.from_file(str(APP_PATH), default_timeout=120).run()
-    return at.sidebar.radio[0].set_value("Comparación").run()
+open_page = partial(open_page_in, "Comparación")
 
 
 def test_comparison_without_results_asks_to_train(

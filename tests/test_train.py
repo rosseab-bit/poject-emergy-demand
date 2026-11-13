@@ -3,8 +3,13 @@
 import numpy as np
 import pandas as pd
 import pytest
+from support import real_dataset
 
 from src import config, data, features, models, train
+
+# Estos tests prueban el entrenamiento y la evaluación, no la búsqueda completa de
+# hiperparámetros (esa se ejerce de punta a punta en test_pipeline): grilla chica.
+pytestmark = pytest.mark.usefixtures("small_grids")
 
 
 def make_xy(n: int = 100) -> tuple[pd.DataFrame, pd.Series]:
@@ -182,11 +187,6 @@ def test_evaluate_real_data_holdout() -> None:
     np.testing.assert_array_equal(
         fitted.estimator.named_steps["imputer"].statistics_, stats_before
     )
-
-
-def real_dataset() -> pd.DataFrame:
-    """Dataset real con variables derivadas y target."""
-    return features.build_dataset(data.flag_repeated_power(data.load_raw()))
 
 
 def test_train_all_covers_every_model_and_scenario() -> None:

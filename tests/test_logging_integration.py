@@ -3,12 +3,9 @@
 import logging
 from pathlib import Path
 
-import pytest
-
 from src import db, logger
 
 
-@pytest.mark.usefixtures("clean_root_logger")
 def test_full_run_is_traceable_by_run_id(tmp_path: Path) -> None:
     """Una corrida deja sus eventos en logs, atados a su run_id en runs."""
     db_path = tmp_path / "structured.db"

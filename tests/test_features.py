@@ -3,6 +3,7 @@
 import numpy as np
 import pandas as pd
 import pytest
+from support import real_dataset
 
 from src import config, data, features
 
@@ -222,11 +223,6 @@ FORBIDDEN_PREDICTORS = {
     "umbral_demanda",
     "demanda_alta",
 }
-
-
-def real_dataset() -> pd.DataFrame:
-    """Dataset real con todas las variables derivadas."""
-    return features.build_dataset(data.flag_repeated_power(data.load_raw()))
 
 
 def test_scenarios_exclude_same_month_demand_and_target_columns() -> None:
