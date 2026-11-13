@@ -1,6 +1,6 @@
 # TP Final: clasificación de la demanda eléctrica mensual
 
-Trabajo final de **Programación Avanzada en Ciencia de Datos**, del grupo **MatIAndo**.
+Trabajo final individual de **Programación Avanzada en Ciencia de Datos**, presentado bajo el nombre **MatIAndo**.
 
 Un clasificador que responde una pregunta: *¿la demanda eléctrica de un mes va a ser **alta** respecto de lo normal para esa época del año?* Usa scikit-learn (regresión logística, Random Forest y XGBoost), dos bases SQLite, un logger propio que escribe en una de ellas, una interfaz en Streamlit y un reporte PDF.
 
