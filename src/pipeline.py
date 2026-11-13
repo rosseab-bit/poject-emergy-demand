@@ -265,6 +265,7 @@ def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(
         level=logging.INFO, format="%(levelname)s %(name)s: %(message)s"
     )
+    db.init_databases()  # en el primer arranque de un clon crea las bases vacías
     try:
         run_id = (
             run_etl(seed=args.seed) if args.solo_etl else run_pipeline(seed=args.seed)

@@ -4,7 +4,13 @@ from pathlib import Path
 
 import pytest
 from streamlit.testing.v1 import AppTest
-from support import go_to, sidebar_text
+from support import (
+    STRUCTURED_TABLES,
+    UNSTRUCTURED_TABLES,
+    go_to,
+    sidebar_text,
+    user_tables,
+)
 from support import start_app as run_app
 
 from app_pages.sidebar import PAGE_NAMES
@@ -290,3 +296,25 @@ def test_sidebar_survives_a_run_whose_summary_cannot_be_read(
     assert not at.exception
     assert at.sidebar.selectbox[0].value == run_id
     assert "Estado:" not in sidebar_text(at)
+
+
+def test_first_start_creates_both_databases_empty(tmp_config: Path) -> None:
+    """Un clon recién descargado no trae bases: al abrir la app aparecen vacías."""
+    assert not config.STRUCTURED_DB_PATH.exists()
+    assert not config.UNSTRUCTURED_DB_PATH.exists()
+    at = run_app()
+    assert not at.exception
+    assert user_tables(config.STRUCTURED_DB_PATH) == dict.fromkeys(STRUCTURED_TABLES, 0)
+    assert user_tables(config.UNSTRUCTURED_DB_PATH) == dict.fromkeys(
+        UNSTRUCTURED_TABLES, 0
+    )
+
+
+def test_a_second_start_does_not_touch_the_existing_data(tmp_config: Path) -> None:
+    """Abrir la app otra vez conserva las corridas ya guardadas."""
+    run_app()
+    run_id = db.create_run(seed=11)
+    at = run_app()
+    assert not at.exception
+    assert user_tables(config.STRUCTURED_DB_PATH)["runs"] == 1
+    assert db.get_run(run_id)["seed"] == 11

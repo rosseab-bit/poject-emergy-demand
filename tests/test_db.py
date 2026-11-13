@@ -5,7 +5,13 @@ import time
 from pathlib import Path
 
 import pytest
-from support import count_rows, main_file_only
+from support import (
+    STRUCTURED_TABLES,
+    UNSTRUCTURED_TABLES,
+    count_rows,
+    main_file_only,
+    user_tables,
+)
 
 from src import config, db
 
@@ -389,3 +395,36 @@ def test_checkpoint_of_an_unreadable_file_is_best_effort(tmp_path: Path) -> None
     broken.write_bytes(b"esto no es una base de datos sqlite" * 50)
     assert db.checkpoint(broken) is False
     assert broken.read_bytes().startswith(b"esto no es")  # no se tocó
+
+
+def test_init_databases_creates_both_files_with_every_table_empty(
+    tmp_path: Path,
+) -> None:
+    """En una carpeta vacía (ni siquiera existe db/) aparecen las dos bases vacías."""
+    structured = tmp_path / "db" / "structured.db"
+    unstructured = tmp_path / "db" / "unstructured.db"
+    assert not structured.parent.exists()
+    db.init_databases(structured, unstructured)
+    assert user_tables(structured) == dict.fromkeys(STRUCTURED_TABLES, 0)
+    assert user_tables(unstructured) == dict.fromkeys(UNSTRUCTURED_TABLES, 0)
+
+
+def test_init_databases_is_idempotent_and_keeps_existing_data(tmp_path: Path) -> None:
+    """Sobre bases que ya existen no borra ni modifica nada."""
+    structured, unstructured = tmp_path / "s.db", tmp_path / "u.db"
+    db.init_databases(structured, unstructured)
+    run_id = db.create_run(seed=7, db_path=structured)
+    insert_prediction(unstructured, run_id, '{"a": 1}')
+    db.init_databases(structured, unstructured)
+    db.init_databases(structured, unstructured)
+    assert user_tables(structured)["runs"] == 1
+    assert user_tables(unstructured)["predicciones"] == 1
+    assert db.get_run(run_id, structured)["seed"] == 7
+
+
+def test_init_databases_defaults_to_the_paths_in_config(tmp_config: Path) -> None:
+    """Sin argumentos usa las rutas de config (aquí apuntadas a una carpeta temporal)."""
+    db.init_databases()
+    assert config.STRUCTURED_DB_PATH.is_file() and config.UNSTRUCTURED_DB_PATH.is_file()
+    assert set(user_tables(config.STRUCTURED_DB_PATH)) == STRUCTURED_TABLES
+    assert set(user_tables(config.UNSTRUCTURED_DB_PATH)) == UNSTRUCTURED_TABLES
