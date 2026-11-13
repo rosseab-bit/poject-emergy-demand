@@ -1,7 +1,7 @@
 # CLAUDE.md: TP Final Programación Avanzada (demanda eléctrica)
 
 ## Contexto
-Proyecto individual de clasificación de demanda eléctrica mensual ("demanda alta" respecto de lo normal para su época), con scikit-learn, dos bases SQLite, logger propio e interfaz en Streamlit. Todas las decisiones y las etapas están en `docs/plan_proyecto.md`. **Leerlo antes de empezar cada etapa.** Si algo del plan parece mal, proponer el cambio y esperar respuesta; no cambiarlo por cuenta propia.
+Proyecto individual de clasificación de demanda eléctrica mensual ("demanda alta" respecto de lo normal para su época), con scikit-learn, SQLite para los datasets y MongoDB para los logs, las corridas y los resultados, logger propio e interfaz en Streamlit. Todas las decisiones y las etapas están en `docs/plan_proyecto.md`. **Leerlo antes de empezar cada etapa.** Si algo del plan parece mal, proponer el cambio y esperar respuesta; no cambiarlo por cuenta propia.
 
 ## Reglas de Git (obligatorias)
 
@@ -63,13 +63,13 @@ git switch -c etapa-N-nombre
 - Python con PEP 8 (verificar con `ruff`), docstrings en funciones y clases, type hints, funciones chicas.
 - La lógica vive en `src/`. `app.py` solo tiene interfaz y llama a los módulos. El mismo código debe poder correr por línea de comandos (`python -m src.pipeline`).
 - La semilla sale de `src/config.py`. Nunca escribirla a mano en otro lado.
-- Nada de `print` para seguimiento: usar el logger, que escribe en `structured.db`. Decorar los pasos del pipeline con `@log_step`.
+- Nada de `print` para seguimiento: usar el logger, que escribe en la colección `logs` de MongoDB. Decorar los pasos del pipeline con `@log_step`.
 - Todo lo que **aprende de los datos** (imputación, escalado, codificación) va dentro del `Pipeline` de scikit-learn y se ajusta solo con entrenamiento. El target y los rezagos son reglas fijas y se calculan en el ETL usando solo datos del pasado, con un test que lo verifique.
 - Los datos crudos de `data/raw/` no se modifican nunca.
 - El reporte PDF se genera en `src/report.py` a partir de lo guardado en las bases, no de la memoria de Streamlit. La conclusión de "qué modelo es mejor" se redacta con reglas explícitas sobre las métricas y no declara ganador si la diferencia está dentro del ruido de la validación cruzada.
-- Conexiones SQLite abiertas por operación (los hilos de Streamlit no las comparten), modo WAL.
+- Conexiones SQLite abiertas por operación (los hilos de Streamlit no las comparten), modo WAL. MongoDB, en cambio, usa un solo `MongoClient` compartido (`src/mongo.py`) y sus credenciales salen del `.env`, que nunca se sube.
 - Cada dependencia nueva se agrega a `requirements.txt` con versión fijada y se avisa antes.
-- `.db`, `.joblib` y los PDF de `reports/` van en `.gitignore` durante el desarrollo. Cómo se entregan las bases se decide al final.
+- `.db`, `.joblib`, los PDF de `reports/` y el `.env` van en `.gitignore`. La base de MongoDB vive en el cluster y no se versiona. Cómo se entregan los datos para la revisión se decide al final.
 
 ## Flujo de trabajo por etapa
 1. Leer la etapa en `docs/plan_proyecto.md` y confirmar la rama.
