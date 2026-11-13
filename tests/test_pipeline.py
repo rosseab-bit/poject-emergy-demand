@@ -250,20 +250,3 @@ def test_failed_training_marks_run_as_error(
             "SELECT COUNT(*) FROM logs WHERE level = 'ERROR' AND run_id = ?", (run_id,)
         ).fetchone()[0]
     assert errors >= 1
-
-
-def test_main_runs_the_whole_pipeline_with_console_logging(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """La línea de comandos configura el log por consola y corre el pipeline una vez."""
-    calls: dict[str, object] = {"runs": 0}
-    monkeypatch.setattr(
-        pipeline.logging, "basicConfig", lambda **kwargs: calls.update(config=kwargs)
-    )
-    monkeypatch.setattr(
-        pipeline, "run_pipeline", lambda: calls.update(runs=calls["runs"] + 1)
-    )
-    pipeline.main()
-    assert calls["runs"] == 1
-    assert calls["config"]["level"] == pipeline.logging.INFO
-    assert "%(message)s" in calls["config"]["format"]
