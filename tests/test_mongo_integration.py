@@ -9,18 +9,29 @@ import logging
 import time
 import uuid
 from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
+from conftest import REAL_MONGO
 from pymongo.collection import Collection
+from pymongo.database import Database
+from support import tiny_grids
 
-from src import logger, mongo, queries, runs
+from src import config, logger, mongo, pipeline, predict, queries, results, runs
 
 pytestmark = pytest.mark.mongo
 
 
 @pytest.fixture
-def real_cluster() -> Iterator[None]:
-    """Usa la configuración real del ``.env``; se omite si falta."""
+def real_cluster(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Levanta la barrera de ``conftest`` y usa el ``.env`` real; se omite si falta.
+
+    Es el único lugar de los tests que llega al cluster: los tests marcados
+    ``mongo`` y solo con ``pytest -m mongo``.
+    """
+    monkeypatch.setattr(config, "ENV_PATH", Path(REAL_MONGO["env_path"]))
+    for name, value in REAL_MONGO["variables"].items():
+        monkeypatch.setenv(name, value)
     try:
         mongo.load_settings()
     except mongo.MongoConfigError as error:
@@ -91,3 +102,57 @@ def test_runs_roundtrip_on_the_real_cluster(real_cluster: None) -> None:
         assert queries.list_runs()["run_id"].tolist()[0] == run_id
     finally:
         runs_collection.drop()
+
+
+@pytest.fixture
+def tests_database(real_cluster: None) -> Iterator[Database]:
+    """La base de pruebas del cluster real, con sus colecciones listas y borradas al salir."""
+    settings = mongo.load_settings()
+    mongo.use_client(mongo.get_client(), f"{settings.db_name}_tests")
+    database = mongo.get_database()
+    mongo.init_mongo()
+    yield database
+    for name in database.list_collection_names():
+        database.drop_collection(name)
+
+
+def test_a_full_training_run_is_saved_and_read_back_on_the_real_cluster(
+    tests_database: Database, tmp_path: Path
+) -> None:
+    """ETL, entrenamiento, predicción y lectura contra Atlas, en la base de pruebas.
+
+    Atlas es más estricto que el Mongo simulado (tipos de numpy, nombres de campos),
+    así que esta es la prueba que importa para el guardado de resultados.
+    """
+    paths = {"db_path": tmp_path / "structured.db"}
+    with tiny_grids():
+        run_id = pipeline.run_etl(seed=7, **paths)
+        pipeline.run_training(
+            run_id,
+            models_dir=tmp_path / "models",
+            scenarios=("A",),
+            model_names=("logistic_regression", "random_forest"),
+            **paths,
+        )
+    prediction = predict.predict_next_month(
+        run_id, 15.0, models_dir=tmp_path / "models", **paths
+    )
+
+    assert queries.run_summary(run_id)["steps"] == {
+        "ETL": True,
+        "Entrenamiento": True,
+        "Predicción": True,
+        "Reporte": False,
+    }
+    table = queries.results_table(run_id)
+    assert table["model"].tolist() == ["logistic_regression", "random_forest"]
+    assert table["f1"].between(0, 1).all()
+    doc = results.load_result(run_id, "A", "random_forest")
+    assert len(doc["predictions"]) == 48
+    assert results.load_run_config(run_id)["seed"] == 7
+    assert queries.latest_prediction(run_id)["id"] == prediction["id"]
+    assert queries.prediction_history(run_id)["id"].tolist() == [prediction["id"]]
+    events = queries.get_logs(run_id)
+    assert (events["event"] == "fin").any() and events["run_id"].eq(run_id).all()
+    with pytest.raises(Exception, match="duplicate|E11000"):
+        tests_database[mongo.PREDICTIONS].insert_one({"id": prediction["id"]})

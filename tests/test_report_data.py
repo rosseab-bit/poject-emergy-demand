@@ -42,7 +42,6 @@ def report_run(tmp_path_factory: pytest.TempPathFactory) -> dict:
     base = tmp_path_factory.mktemp("report")
     paths = {
         "db_path": base / "structured.db",
-        "unstructured_path": base / "unstructured.db",
         "models_dir": base / "models",
     }
     with isolated_logging(), isolated_mongo() as client, tiny_grids():
@@ -50,7 +49,6 @@ def report_run(tmp_path_factory: pytest.TempPathFactory) -> dict:
         pipeline.run_training(
             run_id,
             db_path=paths["db_path"],
-            unstructured_path=paths["unstructured_path"],
             models_dir=paths["models_dir"],
             model_names=LR,
         )
@@ -62,7 +60,7 @@ def report_run(tmp_path_factory: pytest.TempPathFactory) -> dict:
 
 def collect(run: dict, **kwargs) -> report_data.ReportData:
     """Reúne los datos del reporte de la corrida de prueba."""
-    paths = {k: run[k] for k in ("db_path", "unstructured_path", "models_dir")}
+    paths = {k: run[k] for k in ("db_path", "models_dir")}
     return report_data.collect_report_data(run["run_id"], **paths, **kwargs)
 
 
@@ -114,8 +112,9 @@ def test_predictions_are_included_in_order_or_left_out(report_run: dict) -> None
     """Las predicciones se incluyen, de la más vieja a la más nueva, o se omiten."""
     with_predictions = collect(report_run)
     assert [p["temperatura"] for p in with_predictions.predictions] == [12.0, 20.0]
-    ids = [p["id"] for p in with_predictions.predictions]
-    assert ids == sorted(ids)
+    created = [p["created_at"] for p in with_predictions.predictions]
+    assert created == sorted(created)
+    assert len({p["id"] for p in with_predictions.predictions}) == 2  # ids distintos
     first = with_predictions.predictions[0]
     assert first["fecha"] == "2026-09-01" and "created_at" in first
     assert "logistic_regression" in first["modelos"]
@@ -136,9 +135,7 @@ def test_traceability_notes() -> None:
 def test_dirty_run_note_reaches_the_report_data(report_run: dict) -> None:
     """Una corrida hecha con cambios sin commitear lo deja anotado en el reporte."""
     data = collect(report_run)
-    config_doc = results.load_run_config(
-        report_run["run_id"], report_run["unstructured_path"]
-    )
+    config_doc = results.load_run_config(report_run["run_id"])
     assert (config_doc["git_dirty"] is True) == any(
         "sin commitear" in n for n in data.notes
     )
@@ -154,7 +151,6 @@ def test_unknown_untrained_or_missing_etl_runs_are_rejected(
         collect(report_run | {"run_id": report_run["etl_only"]})
     empty = {
         "db_path": tmp_path / "s.db",
-        "unstructured_path": tmp_path / "u.db",
         "models_dir": tmp_path / "m",
     }
     db.init_structured_db(empty["db_path"])
@@ -204,7 +200,7 @@ def test_data_comes_only_from_the_databases_even_in_a_fresh_process(
     code = FRESH_MONGO_PRELUDE + (
         "import json; from src import report_data as r;"
         "a = sys.argv; d = r.collect_report_data(a[1], db_path=Path(a[2]),"
-        " unstructured_path=Path(a[3]), models_dir=Path(a[4]));"
+        " models_dir=Path(a[3]));"
         "print(json.dumps({'seed': d.config['seed'], 'sha': d.config['dataset_sha256'],"
         " 'rows': d.overview['rows'], 'n_pred': len(d.predictions),"
         " 'cat': {k: c.verdict.category for k, c in d.conclusions.items()},"
@@ -218,7 +214,6 @@ def test_data_comes_only_from_the_databases_even_in_a_fresh_process(
             code,
             report_run["run_id"],
             str(report_run["db_path"]),
-            str(report_run["unstructured_path"]),
             str(report_run["models_dir"]),
             str(dump),
         ],
@@ -242,7 +237,6 @@ def test_multi_model_run_uses_the_same_rule(trained_run: dict) -> None:
     data = report_data.collect_report_data(
         trained_run["run_id"],
         db_path=trained_run["db_path"],
-        unstructured_path=trained_run["unstructured_path"],
         models_dir=trained_run["models_dir"],
     )
     for scenario, conclusion in data.conclusions.items():
@@ -261,7 +255,7 @@ def test_a_pdf_can_be_built_with_a_single_model_per_scenario(report_run: dict) -
     Con una sola columna, el gráfico de matrices de confusión queda más alto que la
     página y ReportLab lanzaba LayoutError.
     """
-    paths = {k: report_run[k] for k in ("db_path", "unstructured_path", "models_dir")}
+    paths = {k: report_run[k] for k in ("db_path", "models_dir")}
     pdf = report.generate_report(report_run["run_id"], True, **paths)
     assert pdf.startswith(b"%PDF-") and pdf.rstrip().endswith(b"%%EOF")
     assert len(re.findall(rb"/Type /Page\b", pdf)) >= 4
@@ -291,6 +285,5 @@ def test_report_needs_the_clean_data_too(report_run: dict, tmp_path: Path) -> No
         report_data.collect_report_data(
             report_run["run_id"],
             db_path=empty_structured,
-            unstructured_path=report_run["unstructured_path"],
             models_dir=report_run["models_dir"],
         )

@@ -196,4 +196,3 @@ def user_tables(db_path: Path) -> dict[str, int]:
 
 
 STRUCTURED_TABLES = {"datos_limpios", "datos_originales"}
-UNSTRUCTURED_TABLES = {"configuracion", "predicciones", "resultados_modelos"}

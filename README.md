@@ -143,31 +143,57 @@ Por cada corrida se guarda en `unstructured.db` (tabla `configuracion`): la **se
 - Los PDF son deterministas: con los mismos datos salen los mismos bytes.
 - **Seguridad de los `.joblib`:** son archivos pickle y cargar uno ajeno puede ejecutar código arbitrario. Por eso se guarda el SHA-256 de cada modelo en su documento de resultados y se **verifica antes de cargarlo**. Aun así, solo se deben cargar modelos generados por este proyecto.
 
-## Las dos bases de datos
+## Las bases de datos
 
-Se crean solas en `db/` (ver [Instalación](#instalación)).
+Hay dos almacenes, unidos por el `run_id` de cada corrida. Los dos se preparan solos al arrancar la app o el pipeline: `db/structured.db` se crea vacía y, en MongoDB, se crean las colecciones con sus índices.
 
-| Base | Tabla | Contenido |
+| Almacén | Tabla o colección | Contenido |
 |---|---|---|
-| `structured.db` (relacional) | `datos_limpios` | Los 308 meses limpios (Tabla 1) |
-| | `logs` | Eventos del logger: `ts`, `level`, `module`, `message`, `run_id` |
-| | `runs` | Una fila por corrida: `run_id`, inicio, fin, estado, semilla |
-| `unstructured.db` (JSON) | `resultados_modelos` | Un documento JSON por corrida, escenario y modelo: parámetros, cv, métricas, matriz de confusión, predicciones mes a mes (Tabla 2) |
-| | `configuracion` | Semilla, hash, versiones, commit y parámetros de la corrida (Tabla 3) |
+| SQLite `db/structured.db` | `datos_originales` | El CSV completo (30 columnas), sin modificar |
+| | `datos_limpios` | Los 308 meses limpios (Tabla 1) |
+| MongoDB (Atlas) | `runs` | Una corrida por documento: `run_id`, inicio, fin, estado, semilla |
+| | `logs` | Un documento por evento: `run_id`, `ts`, `level`, `module`, `message` y, dentro de un paso, `step`, `event` (`inicio`, `fin` o `error`) y `duration_ms` |
+| | `resultados_modelos` | Un documento por corrida, escenario y modelo: parámetros, validación cruzada, métricas, matriz de confusión y predicciones mes a mes (Tabla 2) |
+| | `configuracion` | Semilla, hash del dataset, versiones, commit y parámetros de la corrida (Tabla 3) |
 | | `predicciones` | Cada predicción hecha en la app: entradas y probabilidad por modelo |
 
-Los documentos tienen restricción `json_valid` y se consultan con `json_extract`. El `run_id` es la clave compartida entre las dos bases.
+Las credenciales de MongoDB van en un archivo `.env` (hay una plantilla en `.env.example`); ver [Instalación](#instalación).
 
-```sql
--- En unstructured.db: F1 de cada modelo en el hold-out de una corrida
-SELECT scenario, model, ROUND(json_extract(doc, '$.holdout.f1'), 2) AS f1
-FROM resultados_modelos
-WHERE run_id = '<RUN_ID>'
-ORDER BY f1 DESC;
+Ejemplos de consultas, con el mismo cliente que usa el proyecto:
 
+```python
+from src import mongo
+
+database = mongo.get_database()
+
+# F1 de cada modelo en el hold-out de una corrida, de mayor a menor
+resultados = (
+    database["resultados_modelos"]
+    .find(
+        {"run_id": "<RUN_ID>"},
+        {"_id": 0, "scenario": 1, "model": 1, "holdout.f1": 1},
+    )
+    .sort("holdout.f1", -1)
+)
+for documento in resultados:
+    print(documento)
+
+# Eventos de una corrida por módulo y nivel
+eventos = database["logs"].aggregate(
+    [
+        {"$match": {"run_id": "<RUN_ID>"}},
+        {
+            "$group": {
+                "_id": {"module": "$module", "level": "$level"},
+                "eventos": {"$sum": 1},
+            }
+        },
+        {"$sort": {"eventos": -1}},
+    ]
+)
+for fila in eventos:
+    print(fila)
 ```
-
-Las corridas (`runs`) y sus eventos (`logs`) están en MongoDB.
 
 ## Estructura del repositorio
 
@@ -178,7 +204,7 @@ app_pages/             Una página por módulo: datos, entrenamiento, comparaci�
 src/
   config.py            Semilla, rutas y constantes
   logger.py            MongoHandler por lote y @log_step
-  db.py                Acceso a las dos bases (WAL, ATTACH, checkpoint)
+  db.py                Acceso a la base SQLite (WAL, checkpoint)
   mongo.py             Conexión a MongoDB: credenciales del .env y cliente compartido
   runs.py              Corridas (colección runs de MongoDB)
   data.py              Carga y limpieza (ETL)

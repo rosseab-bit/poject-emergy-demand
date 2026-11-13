@@ -6,8 +6,8 @@ opciones de la línea de comandos, las páginas de la interfaz, los paquetes de
 """
 
 import re
-from pathlib import Path
 
+import mongomock
 import pytest
 
 from app_pages.sidebar import PAGE_NAMES
@@ -122,29 +122,10 @@ def test_generated_files_are_ignored_by_git(pattern: str) -> None:
     assert pattern in ignored
 
 
-def test_the_sql_examples_run_on_empty_databases(tmp_path: Path) -> None:
-    """Las consultas SQL del README son válidas sobre las bases recién creadas."""
-    import sqlite3
-
-    from src import db
-
-    structured, unstructured = tmp_path / "s.db", tmp_path / "u.db"
-    db.init_databases(structured, unstructured)
-    sql = "\n".join(code_blocks("sql"))
-    assert "json_extract" in sql
-    only_unstructured = sqlite3.connect(unstructured)
-    both = sqlite3.connect(structured)
-    both.execute(f"ATTACH DATABASE '{unstructured}' AS unstructured")
-    try:
-        for statement in sql.split(";"):
-            body = "\n".join(
-                line for line in statement.splitlines() if not line.startswith("--")
-            ).strip()
-            if not body or body.startswith("ATTACH"):
-                continue
-            body = body.replace("<RUN_ID>", "x")
-            conn = only_unstructured if "FROM resultados_modelos" in body else both
-            conn.execute(body).fetchall()
-    finally:
-        only_unstructured.close()
-        both.close()
+def test_the_mongodb_examples_run_on_empty_collections(
+    mongo_db: mongomock.Database,
+) -> None:
+    """Las consultas de MongoDB del README se ejecutan sobre colecciones vacías."""
+    code = "\n".join(code_blocks("python")).replace("<RUN_ID>", "x")
+    assert "find(" in code and "aggregate(" in code
+    exec(compile(code, "README.md", "exec"), {})  # noqa: S102 - código del propio README

@@ -415,18 +415,17 @@ def test_report_naming_is_defined_once_in_queries(tmp_path: Path) -> None:
 
 def test_report_step_follows_the_pdf_on_disk(tmp_path: Path) -> None:
     """El paso Reporte de la corrida está hecho solo si existe su PDF."""
-    paths = {"unstructured_path": tmp_path / "u.db"}
-    assert queries.run_steps("r1", reports_dir=tmp_path, **paths)["Reporte"] is False
+    assert queries.run_steps("r1", reports_dir=tmp_path)["Reporte"] is False
     (tmp_path / "reporte_r1.pdf").write_bytes(b"%PDF-")
-    assert queries.run_steps("r1", reports_dir=tmp_path, **paths)["Reporte"] is True
-    assert queries.run_steps("otra", reports_dir=tmp_path, **paths)["Reporte"] is False
+    assert queries.run_steps("r1", reports_dir=tmp_path)["Reporte"] is True
+    assert queries.run_steps("otra", reports_dir=tmp_path)["Reporte"] is False
 
 
 def test_generate_report_reads_only_the_databases(
     trained_run: dict, tmp_path: Path
 ) -> None:
     """generate_report y save_report arman el PDF desde las bases, sin Streamlit."""
-    paths = {k: trained_run[k] for k in ("db_path", "unstructured_path", "models_dir")}
+    paths = {k: trained_run[k] for k in ("db_path", "models_dir")}
     saved = report.save_report(trained_run["run_id"], True, tmp_path, **paths)
     pdf = saved.read_bytes()
     assert pdf.startswith(b"%PDF-") and page_count(pdf) >= 5
@@ -440,8 +439,8 @@ def test_a_fresh_process_generates_the_same_report(
     """Un proceso nuevo, sin memoria, genera un reporte con la misma conclusión."""
     code = FRESH_MONGO_PRELUDE + (
         "import json; from src import report;"
-        "a = sys.argv; pdf = report.generate_report(a[1], True, Path(a[2]), Path(a[3]),"
-        " Path(a[4]), page_compression=0); Path(a[5]).write_bytes(pdf);"
+        "a = sys.argv; pdf = report.generate_report(a[1], True, Path(a[2]),"
+        " Path(a[3]), page_compression=0); Path(a[4]).write_bytes(pdf);"
         "print(json.dumps({'n': len(pdf), 'streamlit': 'streamlit' in sys.modules}))"
     )
     out = tmp_path / "hijo.pdf"
@@ -453,7 +452,6 @@ def test_a_fresh_process_generates_the_same_report(
             code,
             trained_run["run_id"],
             str(trained_run["db_path"]),
-            str(trained_run["unstructured_path"]),
             str(trained_run["models_dir"]),
             str(out),
             str(dump),
@@ -470,7 +468,6 @@ def test_a_fresh_process_generates_the_same_report(
         trained_run["run_id"],
         True,
         trained_run["db_path"],
-        trained_run["unstructured_path"],
         trained_run["models_dir"],
     )
     child_text = extract_text(out.read_bytes())

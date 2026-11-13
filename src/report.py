@@ -94,7 +94,6 @@ def generate_report(
     run_id: str,
     include_predictions: bool = True,
     db_path: Path | None = None,
-    unstructured_path: Path | None = None,
     models_dir: Path | None = None,
     page_compression: int = 1,
 ) -> bytes:
@@ -104,8 +103,6 @@ def generate_report(
         run_id: corrida entrenada.
         include_predictions: si se incluyen las predicciones guardadas.
         db_path: ruta de ``structured.db``; por defecto la de ``config``.
-        unstructured_path: ruta de ``unstructured.db``; por defecto la de
-            ``config``.
         models_dir: carpeta de modelos; por defecto ``config.MODELS_DIR``.
         page_compression: 0 deja el texto legible dentro del PDF.
 
@@ -116,7 +113,7 @@ def generate_report(
         ValueError: si la corrida no existe o no está entrenada.
     """
     data = report_data.collect_report_data(
-        run_id, include_predictions, db_path, unstructured_path, models_dir
+        run_id, include_predictions, db_path, models_dir
     )
     return build_pdf(data, report_charts.render_charts(data), page_compression)
 
@@ -164,7 +161,7 @@ def save_report(
         include_predictions: si se incluyen las predicciones guardadas.
         reports_dir: carpeta de salida; por defecto ``config.REPORTS_DIR``.
         generate: función generadora (para pruebas); por defecto ``generate_report``.
-        **paths: ``db_path``, ``unstructured_path`` y ``models_dir`` opcionales.
+        **paths: ``db_path`` y ``models_dir`` opcionales.
 
     Returns:
         La ruta del PDF guardado.

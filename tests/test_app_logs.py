@@ -20,7 +20,6 @@ def two_runs(
 ) -> dict:
     """Una corrida fallida (CSV inválido) y otra exitosa, la más reciente."""
     monkeypatch.setattr(config, "STRUCTURED_DB_PATH", tmp_path / "structured.db")
-    monkeypatch.setattr(config, "UNSTRUCTURED_DB_PATH", tmp_path / "unstructured.db")
     bad = tmp_path / "malo.csv"
     bad.write_text("a,b\n1,2\n")
     with pytest.raises(ValueError, match="Faltan columnas"):
@@ -35,7 +34,6 @@ def test_logs_page_without_data(
 ) -> None:
     """Sin corridas ni eventos avisa, sin errores."""
     monkeypatch.setattr(config, "STRUCTURED_DB_PATH", tmp_path / "s.db")
-    monkeypatch.setattr(config, "UNSTRUCTURED_DB_PATH", tmp_path / "u.db")
     at = open_page()
     assert not at.exception
     assert any("No hay eventos" in i.value for i in at.info)

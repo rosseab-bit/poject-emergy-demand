@@ -1,5 +1,8 @@
 """Tests de la configuración y del cliente compartido de MongoDB (sin red)."""
 
+import os
+import subprocess
+import sys
 import threading
 from pathlib import Path
 
@@ -252,3 +255,33 @@ def test_restore_client_brings_back_the_previous_state(
     assert mongo.get_database().name == "otra"
     mongo.restore_client(previous)
     assert mongo.get_database().name == "demanda_test"
+
+
+def test_tests_cannot_reach_the_real_cluster_by_default() -> None:
+    """La barrera de conftest: sin cliente simulado no hay credenciales que usar."""
+    assert not config.ENV_PATH.exists()
+    for name in (mongo.ENV_URI, mongo.ENV_PASSWORD):
+        assert name not in os.environ
+    mongo.reset_client()
+    with pytest.raises(mongo.MongoConfigError):
+        mongo.get_client()
+
+
+def test_child_processes_cannot_reach_the_real_cluster_either() -> None:
+    """Un proceso hijo hereda la barrera: sin cliente simulado, falla en vez de conectar."""
+    code = (
+        "from src import mongo, config;"
+        "print(config.ENV_PATH.exists());"
+        "mongo.get_client()"
+    )
+    done = subprocess.run(
+        [sys.executable, "-c", code],
+        check=False,
+        cwd=config.ROOT_DIR,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert done.returncode != 0
+    assert done.stdout.strip() == "False"
+    assert "MongoConfigError" in done.stderr

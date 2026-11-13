@@ -7,7 +7,7 @@ from pathlib import Path
 
 import mongomock
 import pytest
-from support import STRUCTURED_TABLES, UNSTRUCTURED_TABLES, user_tables
+from support import STRUCTURED_TABLES, user_tables
 
 from src import config, mongo, pipeline, report
 
@@ -196,12 +196,11 @@ def test_a_bad_argument_in_a_real_process_exits_with_2_without_running() -> None
 def test_main_creates_both_databases_before_running(
     recorder: Recorder, mongo_db: mongomock.Database
 ) -> None:
-    """La línea de comandos también deja las bases listas, aunque no entrene."""
+    """La línea de comandos también deja la base y las colecciones listas, aunque no entrene."""
     assert not config.STRUCTURED_DB_PATH.exists()
     assert mongo_db.list_collection_names() == []
     assert pipeline.main(["--solo-etl"]) == 0
     assert set(user_tables(config.STRUCTURED_DB_PATH)) == STRUCTURED_TABLES
-    assert set(user_tables(config.UNSTRUCTURED_DB_PATH)) == UNSTRUCTURED_TABLES
     assert set(mongo_db.list_collection_names()) == set(mongo.COLLECTIONS)
 
 

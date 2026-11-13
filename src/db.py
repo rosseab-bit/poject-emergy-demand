@@ -1,4 +1,4 @@
-"""Acceso a las bases SQLite del proyecto.
+"""Acceso a la base SQLite del proyecto (``structured.db``).
 
 Cada operación abre su propia conexión (los hilos de Streamlit no las
 comparten) en modo WAL y la cierra al terminar.
@@ -35,34 +35,6 @@ def _raw_table_ddl() -> str:
 
 
 SCHEMA_RAW = _raw_table_ddl()
-
-SCHEMA_UNSTRUCTURED = """
-CREATE TABLE IF NOT EXISTS resultados_modelos (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    run_id     TEXT NOT NULL,
-    scenario   TEXT NOT NULL,
-    model      TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    doc        TEXT NOT NULL CHECK (json_valid(doc)),
-    UNIQUE (run_id, scenario, model)
-);
-
-CREATE TABLE IF NOT EXISTS configuracion (
-    run_id     TEXT PRIMARY KEY,
-    created_at TEXT NOT NULL,
-    doc        TEXT NOT NULL CHECK (json_valid(doc))
-);
-
-CREATE TABLE IF NOT EXISTS predicciones (
-    id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    run_id     TEXT NOT NULL,
-    created_at TEXT NOT NULL,
-    doc        TEXT NOT NULL CHECK (json_valid(doc))
-);
-
-CREATE INDEX IF NOT EXISTS idx_predicciones_run_id ON predicciones (run_id);
-"""
-
 
 # Cuánto espera un checkpoint a que otras conexiones suelten la base (es de mejor
 # esfuerzo: no debe trabar el final de una corrida).
@@ -144,28 +116,6 @@ def checkpoint(
     return busy == 0
 
 
-def checkpoint_all(
-    structured_path: Path | None = None, unstructured_path: Path | None = None
-) -> bool:
-    """Hace ``checkpoint`` de las dos bases (las que existan).
-
-    Args:
-        structured_path: ruta de ``structured.db``; por defecto la de ``config``.
-        unstructured_path: ruta de ``unstructured.db``; por defecto la de
-            ``config``.
-
-    Returns:
-        ``True`` si las dos se volcaron por completo.
-    """
-    unstructured = (
-        unstructured_path
-        if unstructured_path is not None
-        else config.UNSTRUCTURED_DB_PATH
-    )
-    results = [checkpoint(structured_path), checkpoint(unstructured)]
-    return all(results)
-
-
 def init_structured_db(db_path: Path | None = None) -> None:
     """Crea ``datos_originales`` y ``datos_limpios`` si faltan.
 
@@ -174,57 +124,3 @@ def init_structured_db(db_path: Path | None = None) -> None:
     """
     with get_connection(db_path) as conn:
         conn.executescript(SCHEMA_STRUCTURED + SCHEMA_RAW)
-
-
-def init_unstructured_db(db_path: Path | None = None) -> None:
-    """Crea ``resultados_modelos``, ``configuracion`` y ``predicciones`` si faltan.
-
-    Las tres guardan un documento JSON por fila (``doc``), que se consulta con
-    ``json_extract``. El ``run_id`` las conecta con ``structured.db``. Es
-    seguro llamarla sobre una base vieja: agrega las tablas que falten sin
-    tocar los datos.
-
-    Args:
-        db_path: ruta de la base; por defecto ``unstructured.db``.
-    """
-    path = db_path if db_path is not None else config.UNSTRUCTURED_DB_PATH
-    with get_connection(path) as conn:
-        conn.executescript(SCHEMA_UNSTRUCTURED)
-
-
-def init_databases(
-    structured_path: Path | None = None, unstructured_path: Path | None = None
-) -> None:
-    """Crea las dos bases con todas sus tablas vacías si todavía no existen.
-
-    Es lo que hace la app y la línea de comandos al arrancar: quien clona el
-    proyecto no recibe ningún ``.db`` (están en el ``.gitignore``) y las bases
-    aparecen solas en ``db/`` con su esquema completo. Es idempotente: sobre
-    bases que ya existen no borra ni modifica nada.
-
-    Args:
-        structured_path: ruta de ``structured.db``; por defecto la de ``config``.
-        unstructured_path: ruta de ``unstructured.db``; por defecto la de
-            ``config``.
-    """
-    init_structured_db(structured_path)
-    init_unstructured_db(unstructured_path)
-
-
-def attach_unstructured(
-    conn: sqlite3.Connection,
-    unstructured_path: Path | None = None,
-    alias: str = "unstructured",
-) -> None:
-    """Adjunta ``unstructured.db`` a una conexión de ``structured.db``.
-
-    Permite consultas cruzadas por ``run_id``, por ejemplo unir ``runs`` con
-    ``unstructured.resultados_modelos``.
-
-    Args:
-        conn: conexión abierta sobre ``structured.db``.
-        unstructured_path: ruta de la base; por defecto la de ``config``.
-        alias: nombre con el que se consulta la base adjunta.
-    """
-    path = unstructured_path or config.UNSTRUCTURED_DB_PATH
-    conn.execute(f"ATTACH DATABASE ? AS {alias}", (str(path),))

@@ -10,16 +10,14 @@ from pathlib import Path
 import pytest
 from support import (
     FRESH_MONGO_PRELUDE,
-    count_rows,
     dump_mongo,
     isolated_logging,
     isolated_mongo,
-    main_file_only,
     mongo_logs,
     tiny_grids,
 )
 
-from src import config, data, db, logger, pipeline, predict, queries, results
+from src import config, data, logger, mongo, pipeline, predict, queries, results
 
 LR, RF = "logistic_regression", "random_forest"
 
@@ -35,7 +33,6 @@ def predict_run(tmp_path_factory: pytest.TempPathFactory) -> dict:
     base = tmp_path_factory.mktemp("predict")
     paths = {
         "db_path": base / "structured.db",
-        "unstructured_path": base / "unstructured.db",
         "models_dir": base / "models",
     }
     with isolated_logging(), isolated_mongo() as client, tiny_grids():
@@ -43,7 +40,6 @@ def predict_run(tmp_path_factory: pytest.TempPathFactory) -> dict:
         pipeline.run_training(
             run_id,
             db_path=paths["db_path"],
-            unstructured_path=paths["unstructured_path"],
             models_dir=paths["models_dir"],
             scenarios=("A",),
             model_names=(LR, RF),
@@ -68,14 +64,11 @@ def test_predict_models_match_a_manual_prediction(trained_run: dict) -> None:
     predictions = predict.predict_models(
         trained_run["run_id"],
         entry,
-        trained_run["unstructured_path"],
         trained_run["models_dir"],
     )
     assert list(predictions) == [LR, RF]
     for name, prediction in predictions.items():
-        doc = results.load_result(
-            trained_run["run_id"], "A", name, trained_run["unstructured_path"]
-        )
+        doc = results.load_result(trained_run["run_id"], "A", name)
         estimator = results.load_model(doc, trained_run["models_dir"])
         x = entry.features[doc["features"]]
         assert prediction["probabilidad"] == pytest.approx(
@@ -93,9 +86,7 @@ def test_predict_models_uses_scenario_a_not_b(trained_run: dict) -> None:
     """Se usan las 14 variables del escenario A, sin la potencia máxima."""
     entry = input_for(trained_run["db_path"])
     assert "potencia_maxima" not in entry.features.columns
-    doc = results.load_result(
-        trained_run["run_id"], "A", LR, trained_run["unstructured_path"]
-    )
+    doc = results.load_result(trained_run["run_id"], "A", LR)
     assert doc["scenario"] == "A"
     assert "potencia_maxima" not in doc["features"]
 
@@ -108,7 +99,6 @@ def test_predict_models_rejects_a_run_without_scenario_a(predict_run: dict) -> N
             predict.predict_models(
                 run_id,
                 entry,
-                predict_run["unstructured_path"],
                 predict_run["models_dir"],
             )
 
@@ -123,9 +113,7 @@ def test_predict_models_rejects_a_tampered_model(
     victim.write_bytes(victim.read_bytes() + b"x")
     entry = input_for(trained_run["db_path"])
     with pytest.raises(ValueError, match="hash"):
-        predict.predict_models(
-            trained_run["run_id"], entry, trained_run["unstructured_path"], copy
-        )
+        predict.predict_models(trained_run["run_id"], entry, copy)
 
 
 def test_prediction_doc_is_json_and_complete(trained_run: dict) -> None:
@@ -134,7 +122,6 @@ def test_prediction_doc_is_json_and_complete(trained_run: dict) -> None:
     predictions = predict.predict_models(
         trained_run["run_id"],
         entry,
-        trained_run["unstructured_path"],
         trained_run["models_dir"],
     )
     doc = predict.build_prediction_doc(entry, predictions)
@@ -152,28 +139,24 @@ def test_prediction_doc_is_json_and_complete(trained_run: dict) -> None:
 
 
 def test_predict_next_month_saves_and_can_be_read_back(predict_run: dict) -> None:
-    """La predicción queda guardada y se recupera con json_extract y con la capa de lectura."""
+    """La predicción queda guardada en MongoDB y se recupera con la capa de lectura."""
     doc = predict.predict_next_month(
         predict_run["run_id"], 15.0, **only_paths(predict_run)
     )
     assert doc["fecha"] == "2026-09-01"
-    stored = queries.latest_prediction(
-        predict_run["run_id"], predict_run["unstructured_path"]
-    )
+    assert len(doc["id"]) == 8 and int(doc["id"], 16) >= 0  # id corto, como el run_id
+    stored = queries.latest_prediction(predict_run["run_id"])
     assert stored["id"] == doc["id"]
     assert stored["modelos"][LR]["probabilidad"] == doc["modelos"][LR]["probabilidad"]
-    with db.get_connection(predict_run["unstructured_path"]) as conn:
-        probability = conn.execute(
-            "SELECT json_extract(doc, '$.modelos.logistic_regression.probabilidad') "
-            "FROM predicciones WHERE id = ?",
-            (doc["id"],),
-        ).fetchone()[0]
-    assert probability == doc["modelos"][LR]["probabilidad"]
+    raw = mongo.get_database()[mongo.PREDICTIONS].find_one(
+        {"id": doc["id"]}, {"modelos.logistic_regression.probabilidad": 1, "_id": 0}
+    )
+    assert raw["modelos"][LR]["probabilidad"] == doc["modelos"][LR]["probabilidad"]
 
 
 def only_paths(run: dict) -> dict:
     """Las tres rutas que recibe predict_next_month."""
-    return {k: run[k] for k in ("db_path", "unstructured_path", "models_dir")}
+    return {k: run[k] for k in ("db_path", "models_dir")}
 
 
 def test_the_expected_temperature_changes_the_prediction(predict_run: dict) -> None:
@@ -210,20 +193,12 @@ def test_invalid_temperature_saves_nothing_and_logs_the_error(
     predict_run: dict,
 ) -> None:
     """Una temperatura inválida no guarda predicción y deja el error en logs."""
-    before = len(
-        queries.prediction_history(
-            predict_run["run_id"], predict_run["unstructured_path"]
-        )
-    )
+    before = len(queries.prediction_history(predict_run["run_id"]))
     with pytest.raises(ValueError, match="temperatura"):
         predict.predict_next_month(
             predict_run["run_id"], 99.0, **only_paths(predict_run)
         )
-    after = len(
-        queries.prediction_history(
-            predict_run["run_id"], predict_run["unstructured_path"]
-        )
-    )
+    after = len(queries.prediction_history(predict_run["run_id"]))
     assert after == before
     errors = queries.get_logs(predict_run["run_id"], levels=["ERROR"])
     assert errors["message"].str.contains("temperatura").any()
@@ -241,16 +216,19 @@ def test_predict_next_month_rejects_unknown_run_and_untrained_run(
         )
 
 
-def test_prediction_leaves_the_database_files_complete(
-    predict_run: dict, tmp_path: Path
+def test_prediction_sends_its_events_and_saves_only_in_mongodb(
+    predict_run: dict,
 ) -> None:
-    """Después de predecir, los .db copiados sin su -wal ya traen la predicción."""
-    predict.predict_next_month(predict_run["run_id"], 16.0, **only_paths(predict_run))
-    saved = len(queries.prediction_history(None, predict_run["unstructured_path"]))
-    unstructured = main_file_only(predict_run["unstructured_path"], tmp_path)
-    structured = main_file_only(predict_run["db_path"], tmp_path)
-    assert count_rows(unstructured, "predicciones") == saved
-    assert count_rows(structured, "datos_limpios") == 308
+    """Después de predecir, el documento y los eventos ya están en MongoDB."""
+    doc = predict.predict_next_month(
+        predict_run["run_id"], 16.0, **only_paths(predict_run)
+    )
+    assert (
+        mongo.get_database()[mongo.PREDICTIONS].count_documents({"id": doc["id"]}) == 1
+    )
+    messages = [e["message"] for e in mongo_logs(predict_run["run_id"])]
+    assert any(m.startswith(f"Predicción guardada (id {doc['id']})") for m in messages)
+    assert not list(predict_run["db_path"].parent.glob("unstructured*"))
 
 
 def test_prediction_works_in_a_fresh_process(predict_run: dict, tmp_path: Path) -> None:
@@ -258,8 +236,9 @@ def test_prediction_works_in_a_fresh_process(predict_run: dict, tmp_path: Path) 
     code = FRESH_MONGO_PRELUDE + (
         "import json; from src import predict;"
         "a = sys.argv; doc = predict.predict_next_month(a[1], 14.0,"
-        " db_path=Path(a[2]), unstructured_path=Path(a[3]), models_dir=Path(a[4]));"
-        "print(json.dumps({'id': doc['id'], 'p': doc['modelos']['logistic_regression']['probabilidad']}))"
+        " db_path=Path(a[2]), models_dir=Path(a[3]));"
+        "from src import queries; saved = queries.latest_prediction(a[1]);"
+        "print(json.dumps({'id': doc['id'], 'saved': saved['id'], 'p': doc['modelos']['logistic_regression']['probabilidad']}))"
     )
     dump = dump_mongo(predict_run["mongo"], tmp_path / "mongo.json")
     done = subprocess.run(
@@ -269,7 +248,6 @@ def test_prediction_works_in_a_fresh_process(predict_run: dict, tmp_path: Path) 
             code,
             predict_run["run_id"],
             str(predict_run["db_path"]),
-            str(predict_run["unstructured_path"]),
             str(predict_run["models_dir"]),
             str(dump),
         ],
@@ -280,11 +258,7 @@ def test_prediction_works_in_a_fresh_process(predict_run: dict, tmp_path: Path) 
         timeout=120,
     )
     child = json.loads(done.stdout.strip().splitlines()[-1])
-    stored = queries.latest_prediction(
-        predict_run["run_id"], predict_run["unstructured_path"]
-    )
-    assert stored["id"] == child["id"]
-    assert stored["temperatura"] == 14.0
+    assert child["saved"] == child["id"]  # el hijo la guardó y la releyó de MongoDB
     # El proceso de prueba, con otra memoria, obtiene la misma probabilidad.
     again = predict.predict_next_month(
         predict_run["run_id"], 14.0, **only_paths(predict_run)
@@ -294,15 +268,14 @@ def test_prediction_works_in_a_fresh_process(predict_run: dict, tmp_path: Path) 
 
 def test_prediction_history_is_newest_first_and_filterable(predict_run: dict) -> None:
     """El historial va de la más reciente a la más vieja y se filtra por corrida."""
-    path = predict_run["unstructured_path"]
     predict.predict_next_month(predict_run["run_id"], 12.0, **only_paths(predict_run))
-    history = queries.prediction_history(predict_run["run_id"], path)
-    assert history["id"].tolist() == sorted(history["id"], reverse=True)
+    history = queries.prediction_history(predict_run["run_id"])
+    assert history["created_at"].tolist() == sorted(history["created_at"], reverse=True)
     assert history["temperatura"].iloc[0] == 12.0
     assert set(history["run_id"]) == {predict_run["run_id"]}
     assert (history["fecha"] == "2026-09-01").all()
     assert history[f"p_{LR}"].between(0, 1).all()
     assert history["p_xgboost"].isna().all()  # ese modelo no se entrenó en esta corrida
-    assert len(queries.prediction_history(None, path)) >= len(history)
-    assert queries.prediction_history("noexiste", path).empty
-    assert queries.latest_prediction(predict_run["etl_only"], path) is None
+    assert len(queries.prediction_history(None)) >= len(history)
+    assert queries.prediction_history("noexiste").empty
+    assert queries.latest_prediction(predict_run["etl_only"]) is None

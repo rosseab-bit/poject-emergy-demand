@@ -17,7 +17,7 @@ def init_mongo_once() -> bool:
 
 
 st.set_page_config(page_title="Demanda eléctrica", page_icon="⚡", layout="wide")
-db.init_databases()  # en el primer arranque de un clon crea las bases vacías
+db.init_structured_db()  # en el primer arranque de un clon crea la base vacía
 try:
     init_mongo_once()
 except (mongo.MongoConfigError, mongo.MongoUnavailableError) as error:

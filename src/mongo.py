@@ -75,6 +75,7 @@ COLLECTIONS: dict[str, tuple[IndexSpec, ...]] = {
         IndexSpec("uq_configuracion_run_id", [("run_id", ASCENDING)], unique=True),
     ),
     PREDICTIONS: (
+        IndexSpec("uq_predicciones_id", [("id", ASCENDING)], unique=True),
         IndexSpec(
             "idx_predicciones_run_created",
             [("run_id", ASCENDING), ("created_at", ASCENDING)],

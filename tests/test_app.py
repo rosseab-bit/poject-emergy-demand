@@ -7,7 +7,6 @@ import pytest
 from streamlit.testing.v1 import AppTest
 from support import (
     STRUCTURED_TABLES,
-    UNSTRUCTURED_TABLES,
     go_to,
     sidebar_text,
     user_tables,
@@ -299,16 +298,13 @@ def test_sidebar_survives_a_run_whose_summary_cannot_be_read(
     assert "Estado:" not in sidebar_text(at)
 
 
-def test_first_start_creates_both_databases_empty(tmp_config: Path) -> None:
-    """Un clon recién descargado no trae bases: al abrir la app aparecen vacías."""
+def test_first_start_creates_the_sqlite_database_empty(tmp_config: Path) -> None:
+    """Un clon recién descargado no trae la base: al abrir la app aparece vacía."""
     assert not config.STRUCTURED_DB_PATH.exists()
-    assert not config.UNSTRUCTURED_DB_PATH.exists()
     at = run_app()
     assert not at.exception
     assert user_tables(config.STRUCTURED_DB_PATH) == dict.fromkeys(STRUCTURED_TABLES, 0)
-    assert user_tables(config.UNSTRUCTURED_DB_PATH) == dict.fromkeys(
-        UNSTRUCTURED_TABLES, 0
-    )
+    assert not (config.STRUCTURED_DB_PATH.parent / "unstructured.db").exists()
 
 
 def test_first_start_creates_the_mongodb_collections(

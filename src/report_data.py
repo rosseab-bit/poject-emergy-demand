@@ -92,7 +92,6 @@ def _conclusion(
     table: pd.DataFrame,
     noise: dict[str, float],
     notes: list[str],
-    unstructured_path: Path | None,
     models_dir: Path | None,
 ) -> ScenarioConclusion:
     """Veredicto, texto e importancias del modelo recomendado de un escenario."""
@@ -101,7 +100,7 @@ def _conclusion(
     importance = None
     try:
         importance = queries.feature_importance_for(
-            run_id, scenario, verdict.recommended, unstructured_path, models_dir
+            run_id, scenario, verdict.recommended, models_dir
         )
     except (FileNotFoundError, ValueError, LookupError) as error:
         notes.append(
@@ -118,7 +117,6 @@ def collect_report_data(
     run_id: str,
     include_predictions: bool = True,
     db_path: Path | None = None,
-    unstructured_path: Path | None = None,
     models_dir: Path | None = None,
 ) -> ReportData:
     """Reúne desde las bases todo lo que lleva el reporte de una corrida.
@@ -127,8 +125,6 @@ def collect_report_data(
         run_id: corrida entrenada de la que se arma el reporte.
         include_predictions: si se incluyen las predicciones guardadas.
         db_path: ruta de ``structured.db``; por defecto la de ``config``.
-        unstructured_path: ruta de ``unstructured.db``; por defecto la de
-            ``config``.
         models_dir: carpeta de modelos; por defecto ``config.MODELS_DIR``.
 
     Returns:
@@ -141,27 +137,21 @@ def collect_report_data(
     run = runs.get_run(run_id)
     if run is None:
         raise ValueError(f"No existe la corrida {run_id}")
-    table = queries.results_table(run_id, unstructured_path)
+    table = queries.results_table(run_id)
     if table.empty:
         raise ValueError(f"La corrida {run_id} no tiene resultados: primero entrenala.")
     overview = queries.data_overview(db_path)
     if overview is None:
         raise ValueError("No hay datos limpios: primero ejecutá el ETL.")
-    config_doc = results.load_run_config(run_id, unstructured_path)
-    docs = queries.result_docs(run_id, unstructured_path)
+    config_doc = results.load_run_config(run_id)
+    docs = queries.result_docs(run_id)
     noise = queries.noise_summary(table, docs)
     notes = traceability_notes(config_doc)
     conclusions = {
-        scenario: _conclusion(
-            run_id, scenario, table, noise, notes, unstructured_path, models_dir
-        )
+        scenario: _conclusion(run_id, scenario, table, noise, notes, models_dir)
         for scenario in sorted(table["scenario"].unique())
     }
-    predictions = (
-        queries.prediction_docs(run_id, unstructured_path)
-        if include_predictions
-        else []
-    )
+    predictions = queries.prediction_docs(run_id) if include_predictions else []
     return ReportData(
         run_id=run_id,
         generated_at=runs.now_iso(),

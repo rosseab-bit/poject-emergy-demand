@@ -1,8 +1,26 @@
 """Fixtures compartidas y reglas de colección de los tests."""
 
+import os
+from pathlib import Path
+
+# BARRERA contra el cluster real. Esto corre antes de importar ``src``: durante los
+# tests el ``.env`` real y las variables de conexión quedan fuera de alcance, también
+# para los procesos hijos (heredan el entorno). Un test que llegue a MongoDB sin un
+# cliente simulado falla con un error de configuración, en vez de escribir en Atlas.
+# Los tests marcados ``mongo`` recuperan las credenciales con ``REAL_MONGO``.
+REAL_MONGO = {
+    "env_path": os.environ.get("TP_ENV_PATH")
+    or str(Path(__file__).parent.parent / ".env"),
+    "variables": {
+        name: os.environ.pop(name)
+        for name in ("URI", "MONGODB_PASS", "MONGODB_DB")
+        if name in os.environ
+    },
+}
+os.environ["TP_ENV_PATH"] = str(Path(__file__).parent / "no_existe" / ".env")
+
 import logging
 from collections.abc import Iterator
-from pathlib import Path
 
 import mongomock
 import pytest
@@ -97,9 +115,8 @@ def small_grids() -> Iterator[None]:
 
 @pytest.fixture
 def tmp_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Apunta las bases y los modelos de ``config`` a una carpeta temporal vacía."""
+    """Apunta la base SQLite y los modelos de ``config`` a una carpeta temporal vacía."""
     monkeypatch.setattr(config, "STRUCTURED_DB_PATH", tmp_path / "structured.db")
-    monkeypatch.setattr(config, "UNSTRUCTURED_DB_PATH", tmp_path / "unstructured.db")
     monkeypatch.setattr(config, "MODELS_DIR", tmp_path / "models")
     return tmp_path
 
@@ -111,13 +128,11 @@ def trained_run(tmp_path_factory: pytest.TempPathFactory) -> dict:
     Usa regresión logística y Random Forest para cubrir un modelo con
     coeficientes y otro con importancias, sin pagar el costo de XGBoost, y una
     grilla chica de hiperparámetros (aquí no se prueba la búsqueda).
-    Devuelve las rutas de las bases y de los modelos y el ``run_id``.
+    Devuelve la ruta de la base SQLite, la carpeta de modelos, el MongoDB simulado
+    con sus logs y resultados, y el ``run_id``.
     """
     base = tmp_path_factory.mktemp("trained")
-    paths = {
-        "db_path": base / "structured.db",
-        "unstructured_path": base / "unstructured.db",
-    }
+    paths = {"db_path": base / "structured.db"}
     with isolated_logging(), isolated_mongo() as client, tiny_grids():
         run_id = pipeline.run_etl(seed=7, db_path=paths["db_path"])
         pipeline.run_training(
@@ -133,9 +148,6 @@ def trained_run(tmp_path_factory: pytest.TempPathFactory) -> dict:
 def use_trained(trained_run: dict, monkeypatch: pytest.MonkeyPatch) -> dict:
     """Apunta la app a la corrida entrenada una sola vez para toda la sesión."""
     monkeypatch.setattr(config, "STRUCTURED_DB_PATH", trained_run["db_path"])
-    monkeypatch.setattr(
-        config, "UNSTRUCTURED_DB_PATH", trained_run["unstructured_path"]
-    )
     monkeypatch.setattr(config, "MODELS_DIR", trained_run["models_dir"])
     return trained_run
 
@@ -150,6 +162,5 @@ def trained_report_data(trained_run: dict):
             trained_run["run_id"],
             include_predictions=False,
             db_path=trained_run["db_path"],
-            unstructured_path=trained_run["unstructured_path"],
             models_dir=trained_run["models_dir"],
         )

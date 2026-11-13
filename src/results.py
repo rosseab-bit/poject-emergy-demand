@@ -1,4 +1,4 @@
-"""Datos de reproducibilidad y guardado de resultados en ``unstructured.db``."""
+"""Datos de reproducibilidad y guardado de resultados en MongoDB."""
 
 import hashlib
 import json
@@ -13,7 +13,7 @@ import joblib
 import numpy as np
 import pandas as pd
 
-from src import config, db, features, models, runs
+from src import config, features, models, mongo, runs
 from src.logger import log_step
 from src.train import EvalResult, ModelRun
 
@@ -30,6 +30,8 @@ TRACKED_PACKAGES = (
     "joblib",
 )
 GIT_TIMEOUT_SECONDS = 10
+# Campos que el guardado agrega a cada documento y que no son parte del resultado.
+METADATA_FIELDS = ("_id", "run_id", "created_at")
 
 
 def file_sha256(path: Path) -> str:
@@ -146,6 +148,27 @@ def to_json(doc: dict) -> str:
     return json.dumps(doc, ensure_ascii=False, default=_json_default)
 
 
+def to_document(doc: dict, **metadata: object) -> dict:
+    """Pasa un documento a tipos nativos de Python, listo para guardar en MongoDB.
+
+    Los tipos de numpy (``int64``, ``float32``...) no los acepta el driver, así
+    que se convierten con la misma regla que ``to_json``.
+
+    Args:
+        doc: el documento (resultado, configuración o predicción).
+        **metadata: campos que se agregan al principio (``run_id``, ``created_at``).
+
+    Returns:
+        Un documento nuevo, con ``metadata`` y luego los campos de ``doc``.
+    """
+    return {**metadata, **json.loads(to_json(doc))}
+
+
+def strip_metadata(doc: dict) -> dict:
+    """Quita de un documento leído de MongoDB los campos que agrega el guardado."""
+    return {k: v for k, v in doc.items() if k not in METADATA_FIELDS}
+
+
 def build_run_config(
     csv_path: Path | None = None, seed: int = config.SEED
 ) -> dict[str, object]:
@@ -176,26 +199,20 @@ def build_run_config(
 
 
 @log_step
-def save_run_config(
-    run_id: str, doc: dict[str, object], db_path: Path | None = None
-) -> None:
-    """Guarda la configuración de una corrida en la tabla ``configuracion``.
+def save_run_config(run_id: str, doc: dict[str, object]) -> None:
+    """Guarda la configuración de una corrida en la colección ``configuracion``.
 
     Args:
         run_id: identificador de la corrida (uno por corrida).
         doc: documento de ``build_run_config``.
-        db_path: ruta de ``unstructured.db``; por defecto la de ``config``.
 
     Raises:
-        sqlite3.IntegrityError: si ya hay una configuración para ese ``run_id``.
+        ValueError: si ya hay una configuración para ese ``run_id``.
     """
-    path = db_path if db_path is not None else config.UNSTRUCTURED_DB_PATH
-    db.init_unstructured_db(path)
-    with db.get_connection(path) as conn:
-        conn.execute(
-            "INSERT INTO configuracion (run_id, created_at, doc) VALUES (?, ?, ?)",
-            (run_id, runs.now_iso(), to_json(doc)),
-        )
+    collection = mongo.get_database()[mongo.CONFIGURATION]
+    if collection.find_one({"run_id": run_id}, {"_id": 1}) is not None:
+        raise ValueError(f"Ya hay una configuración para la corrida {run_id}")
+    collection.insert_one(to_document(doc, run_id=run_id, created_at=runs.now_iso()))
 
 
 def model_filename(run_id: str, scenario: str, model: str) -> str:
@@ -248,12 +265,7 @@ def build_result_doc(run: ModelRun, model_name: str, model_sha256: str) -> dict:
 
 
 @log_step
-def save_model_run(
-    run_id: str,
-    run: ModelRun,
-    models_dir: Path | None = None,
-    db_path: Path | None = None,
-) -> Path:
+def save_model_run(run_id: str, run: ModelRun, models_dir: Path | None = None) -> Path:
     """Guarda el modelo (``.joblib``) y su resultado (Tabla 2) de una corrida.
 
     Si falla el guardado en la base, borra el archivo recién escrito.
@@ -262,7 +274,6 @@ def save_model_run(
         run_id: identificador de la corrida.
         run: resultado de entrenar un modelo en un escenario.
         models_dir: carpeta de modelos; por defecto ``config.MODELS_DIR``.
-        db_path: ruta de ``unstructured.db``; por defecto la de ``config``.
 
     Returns:
         Ruta del archivo ``.joblib``.
@@ -273,15 +284,9 @@ def save_model_run(
         FileExistsError: si el archivo del modelo ya existe.
     """
     directory = models_dir if models_dir is not None else config.MODELS_DIR
-    path = db_path if db_path is not None else config.UNSTRUCTURED_DB_PATH
-    db.init_unstructured_db(path)
-    with db.get_connection(path) as conn:
-        exists = conn.execute(
-            "SELECT 1 FROM resultados_modelos "
-            "WHERE run_id = ? AND scenario = ? AND model = ?",
-            (run_id, run.scenario, run.model),
-        ).fetchone()
-    if exists:
+    collection = mongo.get_database()[mongo.RESULTS]
+    key = {"run_id": run_id, "scenario": run.scenario, "model": run.model}
+    if collection.find_one(key, {"_id": 1}) is not None:
         raise ValueError(f"Ya existe el resultado {run_id}/{run.scenario}/{run.model}")
 
     directory.mkdir(parents=True, exist_ok=True)
@@ -292,12 +297,9 @@ def save_model_run(
     joblib.dump(run.search.estimator, model_path)
     try:
         doc = build_result_doc(run, name, file_sha256(model_path))
-        with db.get_connection(path) as conn:
-            conn.execute(
-                "INSERT INTO resultados_modelos "
-                "(run_id, scenario, model, created_at, doc) VALUES (?, ?, ?, ?, ?)",
-                (run_id, run.scenario, run.model, runs.now_iso(), to_json(doc)),
-            )
+        collection.insert_one(
+            to_document(doc, run_id=run_id, created_at=runs.now_iso())
+        )
     except BaseException:
         model_path.unlink(missing_ok=True)
         raise
@@ -305,33 +307,27 @@ def save_model_run(
     return model_path
 
 
-def load_result(
-    run_id: str, scenario: str, model: str, db_path: Path | None = None
-) -> dict:
-    """Recupera el documento JSON de un resultado guardado.
+def load_result(run_id: str, scenario: str, model: str) -> dict:
+    """Recupera el documento de un resultado guardado.
 
     Args:
         run_id: identificador de la corrida.
         scenario: ``"A"`` o ``"B"``.
         model: nombre del modelo.
-        db_path: ruta de ``unstructured.db``; por defecto la de ``config``.
 
     Returns:
-        El documento decodificado.
+        El documento, sin los campos que agrega el guardado (``run_id``,
+        ``created_at``).
 
     Raises:
         LookupError: si no existe ese resultado.
     """
-    path = db_path if db_path is not None else config.UNSTRUCTURED_DB_PATH
-    with db.get_connection(path) as conn:
-        row = conn.execute(
-            "SELECT doc FROM resultados_modelos "
-            "WHERE run_id = ? AND scenario = ? AND model = ?",
-            (run_id, scenario, model),
-        ).fetchone()
-    if row is None:
+    found = mongo.get_database()[mongo.RESULTS].find_one(
+        {"run_id": run_id, "scenario": scenario, "model": model}
+    )
+    if found is None:
         raise LookupError(f"No hay resultado para {run_id}/{scenario}/{model}")
-    return json.loads(row["doc"])
+    return strip_metadata(found)
 
 
 def load_model(doc: dict, models_dir: Path | None = None) -> object:
@@ -361,20 +357,14 @@ def load_model(doc: dict, models_dir: Path | None = None) -> object:
     return joblib.load(path)
 
 
-def has_results(run_id: str, db_path: Path | None = None) -> bool:
+def has_results(run_id: str) -> bool:
     """Indica si una corrida ya tiene resultados guardados en la Tabla 2.
 
     Args:
         run_id: identificador de la corrida.
-        db_path: ruta de ``unstructured.db``; por defecto la de ``config``.
     """
-    path = db_path if db_path is not None else config.UNSTRUCTURED_DB_PATH
-    db.init_unstructured_db(path)
-    with db.get_connection(path) as conn:
-        row = conn.execute(
-            "SELECT 1 FROM resultados_modelos WHERE run_id = ? LIMIT 1", (run_id,)
-        ).fetchone()
-    return row is not None
+    found = mongo.get_database()[mongo.RESULTS].find_one({"run_id": run_id}, {"_id": 1})
+    return found is not None
 
 
 def feature_importance(estimator: object, feature_names: list[str]) -> pd.DataFrame:
@@ -412,47 +402,37 @@ def feature_importance(estimator: object, feature_names: list[str]) -> pd.DataFr
     return table.loc[order].reset_index(drop=True)
 
 
-def saved_models(run_id: str, scenario: str, db_path: Path | None = None) -> list[str]:
+def saved_models(run_id: str, scenario: str) -> list[str]:
     """Lista los modelos con resultado guardado en una corrida y escenario.
 
     Args:
         run_id: identificador de la corrida.
         scenario: ``"A"`` o ``"B"``.
-        db_path: ruta de ``unstructured.db``; por defecto la de ``config``.
 
     Returns:
         Nombres de modelo, de más simple a más complejo.
     """
-    path = db_path if db_path is not None else config.UNSTRUCTURED_DB_PATH
-    db.init_unstructured_db(path)
-    with db.get_connection(path) as conn:
-        rows = conn.execute(
-            "SELECT model FROM resultados_modelos WHERE run_id = ? AND scenario = ?",
-            (run_id, scenario),
-        ).fetchall()
-    found = {row["model"] for row in rows}
+    found = set(
+        mongo.get_database()[mongo.RESULTS].distinct(
+            "model", {"run_id": run_id, "scenario": scenario}
+        )
+    )
     return [name for name in models.MODEL_NAMES if name in found]
 
 
-def load_run_config(run_id: str, db_path: Path | None = None) -> dict:
+def load_run_config(run_id: str) -> dict:
     """Recupera la configuración guardada de una corrida (Tabla 3).
 
     Args:
         run_id: identificador de la corrida.
-        db_path: ruta de ``unstructured.db``; por defecto la de ``config``.
 
     Returns:
-        El documento decodificado.
+        El documento, sin los campos que agrega el guardado.
 
     Raises:
         LookupError: si la corrida no tiene configuración guardada.
     """
-    path = db_path if db_path is not None else config.UNSTRUCTURED_DB_PATH
-    db.init_unstructured_db(path)
-    with db.get_connection(path) as conn:
-        row = conn.execute(
-            "SELECT doc FROM configuracion WHERE run_id = ?", (run_id,)
-        ).fetchone()
-    if row is None:
+    found = mongo.get_database()[mongo.CONFIGURATION].find_one({"run_id": run_id})
+    if found is None:
         raise LookupError(f"No hay configuración guardada para la corrida {run_id}")
-    return json.loads(row["doc"])
+    return strip_metadata(found)
