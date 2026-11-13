@@ -189,6 +189,7 @@ src/
   config.py            Semilla, rutas y constantes
   logger.py            SQLiteHandler y @log_step
   db.py                Acceso a las dos bases (WAL, ATTACH, checkpoint)
+  mongo.py             Conexión a MongoDB: credenciales del .env y cliente compartido
   data.py              Carga y limpieza (ETL)
   features.py          Variables derivadas, rezagos y target
   models.py            Pipelines y grillas de hiperparámetros

@@ -22,6 +22,11 @@ RAW_CSV_PATH: Path = DATA_RAW_DIR / "demanda_electricidad_original_mensual2.csv"
 STRUCTURED_DB_PATH: Path = DB_DIR / "structured.db"
 UNSTRUCTURED_DB_PATH: Path = DB_DIR / "unstructured.db"
 
+# MongoDB (Atlas): credenciales en un .env que no se sube a Git.
+ENV_PATH: Path = ROOT_DIR / ".env"
+MONGO_DB_NAME: str = "demanda_electrica"
+MONGO_TIMEOUT_MS: int = 10_000
+
 # Validación temporal: meses finales reservados como hold-out (12 positivos
 # en los últimos 48 meses, contra 7 en 36) y cortes de TimeSeriesSplit en el
 # resto (con 3 cortes cada validación tiene al menos 6 positivos).

@@ -4,10 +4,11 @@ import logging
 from collections.abc import Iterator
 from pathlib import Path
 
+import mongomock
 import pytest
 from support import isolated_logging, tiny_grids
 
-from src import config, logger, pipeline
+from src import config, logger, mongo, pipeline
 
 # Fixtures que entrenan modelos reales: los tests que las usan se marcan ``slow``.
 HEAVY_FIXTURES = {
@@ -23,9 +24,20 @@ HEAVY_FIXTURES = {
 APP_TEST_PREFIX = "test_app"
 
 
-def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
-    """Marca como ``slow`` lo que entrena modelos o recorre la app completa."""
+def pytest_collection_modifyitems(
+    config: pytest.Config, items: list[pytest.Item]
+) -> None:
+    """Marca como ``slow`` lo que entrena modelos o recorre la app completa.
+
+    Los tests ``mongo`` hablan con el cluster real: se omiten salvo que se pidan
+    con ``pytest -m mongo``.
+    """
+    run_mongo = "mongo" in (config.getoption("markexpr") or "")
     for item in items:
+        if "mongo" in item.keywords and not run_mongo:
+            item.add_marker(
+                pytest.mark.skip(reason="cluster real: usar pytest -m mongo")
+            )
         uses_trained_run = HEAVY_FIXTURES & set(getattr(item, "fixturenames", ()))
         is_app_test = item.module.__name__.split(".")[-1].startswith(APP_TEST_PREFIX)
         if uses_trained_run or is_app_test:
@@ -46,6 +58,22 @@ def clean_root_logger() -> Iterator[None]:
     yield
     root.setLevel(old_level)
     root.handlers[:] = old_handlers
+
+
+@pytest.fixture(autouse=True)
+def clean_mongo_client() -> Iterator[None]:
+    """Olvida el cliente compartido de MongoDB al terminar CADA test."""
+    yield
+    mongo.reset_client()
+
+
+@pytest.fixture
+def mongo_db() -> Iterator[mongomock.Database]:
+    """Una base MongoDB simulada en memoria, instalada como cliente compartido."""
+    client = mongomock.MongoClient()
+    mongo.use_client(client, "demanda_test")
+    yield client["demanda_test"]
+    client.close()
 
 
 @pytest.fixture
