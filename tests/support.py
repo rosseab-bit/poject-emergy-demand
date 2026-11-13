@@ -101,3 +101,25 @@ def count_rows(path: Path, table: str) -> int | None:
         return None
     finally:
         conn.close()
+
+
+def user_tables(db_path: Path) -> dict[str, int]:
+    """Tablas propias de una base (sin las internas de SQLite) con su cantidad de filas."""
+    conn = sqlite3.connect(db_path)
+    try:
+        names = [
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' "
+                "AND name NOT LIKE 'sqlite_%' ORDER BY name"
+            )
+        ]
+        return {
+            n: conn.execute(f"SELECT COUNT(*) FROM {n}").fetchone()[0] for n in names
+        }
+    finally:
+        conn.close()
+
+
+STRUCTURED_TABLES = {"datos_limpios", "logs", "runs"}
+UNSTRUCTURED_TABLES = {"configuracion", "predicciones", "resultados_modelos"}

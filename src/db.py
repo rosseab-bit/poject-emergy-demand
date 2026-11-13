@@ -266,6 +266,25 @@ def init_unstructured_db(db_path: Path | None = None) -> None:
         conn.executescript(SCHEMA_UNSTRUCTURED)
 
 
+def init_databases(
+    structured_path: Path | None = None, unstructured_path: Path | None = None
+) -> None:
+    """Crea las dos bases con todas sus tablas vacías si todavía no existen.
+
+    Es lo que hace la app y la línea de comandos al arrancar: quien clona el
+    proyecto no recibe ningún ``.db`` (están en el ``.gitignore``) y las bases
+    aparecen solas en ``db/`` con su esquema completo. Es idempotente: sobre
+    bases que ya existen no borra ni modifica nada.
+
+    Args:
+        structured_path: ruta de ``structured.db``; por defecto la de ``config``.
+        unstructured_path: ruta de ``unstructured.db``; por defecto la de
+            ``config``.
+    """
+    init_structured_db(structured_path)
+    init_unstructured_db(unstructured_path)
+
+
 def attach_unstructured(
     conn: sqlite3.Connection,
     unstructured_path: Path | None = None,

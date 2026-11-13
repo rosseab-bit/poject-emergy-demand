@@ -1,5 +1,6 @@
 """Ejecución del pipeline por línea de comandos: ``python -m src.pipeline``."""
 
+import argparse
 import logging
 from collections.abc import Callable
 from pathlib import Path
@@ -205,12 +206,78 @@ def run_pipeline(
     )
 
 
-def main() -> None:
-    """Punto de entrada: corre el ETL, entrena y guarda; muestra el log."""
+def _non_negative_int(text: str) -> int:
+    """Convierte un argumento de la línea de comandos en un entero no negativo."""
+    try:
+        value = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"no es un número entero: {text!r}") from None
+    if value < 0:
+        raise argparse.ArgumentTypeError(f"no puede ser negativo: {value}")
+    return value
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """Arma el parser de la línea de comandos de ``python -m src.pipeline``."""
+    parser = argparse.ArgumentParser(
+        prog="python -m src.pipeline",
+        add_help=False,
+        description=(
+            "Ejecuta el ETL, entrena los tres modelos en los escenarios A y B y "
+            "guarda los resultados como una corrida registrada en las bases."
+        ),
+    )
+    parser.add_argument(
+        "-h", "--help", action="help", help="muestra esta ayuda y termina"
+    )
+    parser.add_argument(
+        "--seed",
+        type=_non_negative_int,
+        default=config.SEED,
+        help=f"semilla de la corrida (por defecto {config.SEED}, la de config.py)",
+    )
+    parser.add_argument(
+        "--solo-etl",
+        action="store_true",
+        help="solo ejecuta el ETL (carga, limpieza y datos_limpios), sin entrenar",
+    )
+    parser.add_argument(
+        "--reporte",
+        action="store_true",
+        help="al terminar, genera el PDF de la corrida en reports/",
+    )
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Punto de entrada: corre la corrida pedida y muestra el log por consola.
+
+    Args:
+        argv: argumentos de la línea de comandos; por defecto ``sys.argv[1:]``.
+
+    Returns:
+        Código de salida: 0 si la corrida terminó bien y 1 si falló.
+    """
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.solo_etl and args.reporte:
+        parser.error("--reporte necesita entrenar: no se puede usar con --solo-etl")
     logging.basicConfig(
         level=logging.INFO, format="%(levelname)s %(name)s: %(message)s"
     )
-    run_pipeline()
+    db.init_databases()  # en el primer arranque de un clon crea las bases vacías
+    try:
+        run_id = (
+            run_etl(seed=args.seed) if args.solo_etl else run_pipeline(seed=args.seed)
+        )
+        if args.reporte:
+            from src import report  # solo si se pide: carga ReportLab y matplotlib
+
+            log.info("Reporte guardado en %s", report.save_report(run_id))
+    except Exception as error:  # noqa: BLE001 - el detalle ya quedó en logs
+        log.error("La corrida falló: %s: %s", type(error).__name__, error)
+        return 1
+    return 0
 
 
 if __name__ == "__main__":
@@ -219,4 +286,4 @@ if __name__ == "__main__":
     # registrados en ``logs``.
     from src.pipeline import main as _main
 
-    _main()
+    raise SystemExit(_main())
