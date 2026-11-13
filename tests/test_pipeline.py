@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from support import count_rows, main_file_only, mongo_logs, orphan_logs
 
-from src import config, data, db, pipeline, queries, results, train
+from src import config, data, db, pipeline, queries, results, runs, train
 
 # Integración: corre el ETL y el entrenamiento de verdad.
 pytestmark = pytest.mark.slow
@@ -20,7 +20,7 @@ def test_run_etl_end_to_end(tmp_path: Path) -> None:
     assert len(clean) == 308
     assert data.count_complete_rows(clean) == 259
 
-    run = db.get_run(run_id, db_path)
+    run = runs.get_run(run_id)
     assert run["status"] == "ok"
     assert run["finished_at"] is not None
 
@@ -66,8 +66,7 @@ def test_run_etl_failure_is_logged_and_run_marked_error(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="Faltan columnas"):
         pipeline.run_etl(csv_path=bad_csv, db_path=db_path)
 
-    with db.get_connection(db_path) as conn:
-        run = conn.execute("SELECT run_id, status FROM runs").fetchone()
+    [run] = queries.list_runs().to_dict("records")
     errors = mongo_logs(run["run_id"], level="ERROR")
     assert run["status"] == "error"
     assert len(errors) >= 1
@@ -84,15 +83,14 @@ def test_run_pipeline_trains_saves_and_links_everything(tmp_path: Path) -> None:
         db_path=db_path, unstructured_path=udb_path, models_dir=models_dir
     )
 
-    assert db.get_run(run_id, db_path)["status"] == "ok"
+    assert runs.get_run(run_id)["status"] == "ok"
     rows = mongo_logs(run_id)
     assert orphan_logs() == 0
     with db.get_connection(db_path) as conn:
         db.attach_unstructured(conn, udb_path)
         joined = conn.execute(
             "SELECT m.scenario, m.model, json_extract(m.doc, '$.holdout.f1') AS f1 "
-            "FROM runs r JOIN unstructured.resultados_modelos m "
-            "ON m.run_id = r.run_id WHERE r.run_id = ?",
+            "FROM unstructured.resultados_modelos m WHERE m.run_id = ?",
             (run_id,),
         ).fetchall()
         config_rows = conn.execute(
@@ -125,12 +123,12 @@ def test_run_pipeline_trains_saves_and_links_everything(tmp_path: Path) -> None:
 
 
 def test_run_etl_records_the_given_seed(tmp_path: Path) -> None:
-    """La semilla elegida queda en la tabla runs."""
+    """La semilla elegida queda en la colección runs."""
     db_path = tmp_path / "structured.db"
     run_id = pipeline.run_etl(db_path=db_path, seed=7)
-    assert db.get_run(run_id, db_path)["seed"] == 7
+    assert runs.get_run(run_id)["seed"] == 7
     other = pipeline.run_etl(db_path=db_path)
-    assert db.get_run(other, db_path)["seed"] == config.SEED
+    assert runs.get_run(other)["seed"] == config.SEED
 
 
 LR = ("logistic_regression",)
@@ -161,13 +159,12 @@ def test_training_continues_the_etl_run(paths: dict) -> None:
     assert same == run_id
     assert calls == [(1, 1, "A/logistic_regression")]
 
-    with db.get_connection(paths["db_path"]) as conn:
-        assert conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0] == 1
+    assert len(queries.list_runs()) == 1
     messages = [e["message"] for e in mongo_logs(run_id)]
     assert orphan_logs() == 0
     assert any("datos_limpios guardada" in m for m in messages)  # ETL
     assert any("Resultado guardado: A/logistic_regression" in m for m in messages)
-    run = db.get_run(run_id, paths["db_path"])
+    run = runs.get_run(run_id)
     assert (run["status"], run["seed"]) == ("ok", 7)
     doc = results.load_result(
         run_id, "A", "logistic_regression", paths["unstructured_path"]
@@ -199,7 +196,7 @@ def test_a_finished_run_leaves_both_database_files_complete(
     unstructured = main_file_only(
         paths["unstructured_path"], tmp_path / "tras_entrenar"
     )
-    assert count_rows(structured, "runs") == 1
+    assert count_rows(structured, "datos_originales") == 308
     assert count_rows(unstructured, "resultados_modelos") == 1
     assert count_rows(unstructured, "configuracion") == 1
     for db_file in (paths["db_path"], paths["unstructured_path"]):
@@ -221,10 +218,10 @@ def test_training_rejects_unknown_run_and_missing_etl(paths: dict) -> None:
     with pytest.raises(ValueError, match="No existe la corrida"):
         pipeline.run_training("noexiste", **paths)
     db.init_structured_db(paths["db_path"])
-    empty_run = db.create_run(db_path=paths["db_path"])
+    empty_run = runs.create_run()
     with pytest.raises(ValueError, match="Primero ejecutá el ETL"):
         pipeline.run_training(empty_run, **paths)
-    assert db.get_run(empty_run, paths["db_path"])["status"] == "running"
+    assert runs.get_run(empty_run)["status"] == "running"
 
 
 def test_failed_training_marks_run_as_error(
@@ -239,5 +236,5 @@ def test_failed_training_marks_run_as_error(
     monkeypatch.setattr(train, "train_all", boom)
     with pytest.raises(RuntimeError, match="falla de prueba"):
         pipeline.run_training(run_id, scenarios=("A",), model_names=LR, **paths)
-    assert db.get_run(run_id, paths["db_path"])["status"] == "error"
+    assert runs.get_run(run_id)["status"] == "error"
     assert len(mongo_logs(run_id, level="ERROR")) >= 1

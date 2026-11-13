@@ -288,24 +288,19 @@ def test_load_model_missing_file_raises(saved: tuple[Path, Path]) -> None:
         results.load_model(doc, models_dir)
 
 
-def test_cross_query_with_attach_database(
+def test_results_can_be_joined_with_json_extract_and_attach(
     saved: tuple[Path, Path], tmp_path: Path
 ) -> None:
-    """Un mismo run_id conecta runs y logs con resultados_modelos vía ATTACH."""
+    """Los resultados se consultan con json_extract, y ATTACH sigue uniendo bases."""
     udb_path, _ = saved
     sdb = tmp_path / "structured.db"
     db.init_structured_db(sdb)
-    run_id = db.create_run(db_path=sdb)
     with db.get_connection(sdb) as conn:
-        conn.execute("UPDATE runs SET run_id = 'run1' WHERE run_id = ?", (run_id,))
         db.attach_unstructured(conn, udb_path)
         row = conn.execute(
-            "SELECT r.status, r.seed, m.model, "
-            "json_extract(m.doc, '$.holdout.f1') AS f1 "
-            "FROM runs r JOIN unstructured.resultados_modelos m ON m.run_id = r.run_id"
+            "SELECT m.model, json_extract(m.doc, '$.holdout.f1') AS f1 "
+            "FROM unstructured.resultados_modelos m"
         ).fetchone()
-    assert row["status"] == "running"
-    assert row["seed"] == config.SEED
     assert row["model"] == "logistic_regression"
     assert 0.0 <= row["f1"] <= 1.0
 

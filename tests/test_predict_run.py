@@ -9,7 +9,9 @@ from pathlib import Path
 
 import pytest
 from support import (
+    FRESH_MONGO_PRELUDE,
     count_rows,
+    dump_mongo,
     isolated_logging,
     isolated_mongo,
     main_file_only,
@@ -248,17 +250,18 @@ def test_prediction_leaves_the_database_files_complete(
     unstructured = main_file_only(predict_run["unstructured_path"], tmp_path)
     structured = main_file_only(predict_run["db_path"], tmp_path)
     assert count_rows(unstructured, "predicciones") == saved
-    assert count_rows(structured, "runs") >= 1
+    assert count_rows(structured, "datos_limpios") == 308
 
 
-def test_prediction_works_in_a_fresh_process(predict_run: dict) -> None:
+def test_prediction_works_in_a_fresh_process(predict_run: dict, tmp_path: Path) -> None:
     """Funciona después de reiniciar: un proceso nuevo predice solo desde el disco."""
-    code = (
-        "import sys, json; from pathlib import Path; from src import predict;"
+    code = FRESH_MONGO_PRELUDE + (
+        "import json; from src import predict;"
         "a = sys.argv; doc = predict.predict_next_month(a[1], 14.0,"
         " db_path=Path(a[2]), unstructured_path=Path(a[3]), models_dir=Path(a[4]));"
         "print(json.dumps({'id': doc['id'], 'p': doc['modelos']['logistic_regression']['probabilidad']}))"
     )
+    dump = dump_mongo(predict_run["mongo"], tmp_path / "mongo.json")
     done = subprocess.run(
         [
             sys.executable,
@@ -268,6 +271,7 @@ def test_prediction_works_in_a_fresh_process(predict_run: dict) -> None:
             str(predict_run["db_path"]),
             str(predict_run["unstructured_path"]),
             str(predict_run["models_dir"]),
+            str(dump),
         ],
         cwd=config.ROOT_DIR,
         capture_output=True,

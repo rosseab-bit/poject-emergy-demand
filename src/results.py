@@ -13,7 +13,7 @@ import joblib
 import numpy as np
 import pandas as pd
 
-from src import config, db, features, models
+from src import config, db, features, models, runs
 from src.logger import log_step
 from src.train import EvalResult, ModelRun
 
@@ -194,7 +194,7 @@ def save_run_config(
     with db.get_connection(path) as conn:
         conn.execute(
             "INSERT INTO configuracion (run_id, created_at, doc) VALUES (?, ?, ?)",
-            (run_id, db.now_iso(), to_json(doc)),
+            (run_id, runs.now_iso(), to_json(doc)),
         )
 
 
@@ -296,7 +296,7 @@ def save_model_run(
             conn.execute(
                 "INSERT INTO resultados_modelos "
                 "(run_id, scenario, model, created_at, doc) VALUES (?, ?, ?, ?, ?)",
-                (run_id, run.scenario, run.model, db.now_iso(), to_json(doc)),
+                (run_id, run.scenario, run.model, runs.now_iso(), to_json(doc)),
             )
     except BaseException:
         model_path.unlink(missing_ok=True)

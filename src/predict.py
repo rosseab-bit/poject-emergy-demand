@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from src import config, data, db, features, logger, results
+from src import config, data, db, features, logger, results, runs
 from src.data import DATE_COLUMN, validate_monthly_dates
 
 log = logging.getLogger(__name__)
@@ -216,7 +216,7 @@ def save_prediction(
     with db.get_connection(path) as conn:
         cursor = conn.execute(
             "INSERT INTO predicciones (run_id, created_at, doc) VALUES (?, ?, ?)",
-            (run_id, db.now_iso(), results.to_json(doc)),
+            (run_id, runs.now_iso(), results.to_json(doc)),
         )
         return int(cursor.lastrowid)
 
@@ -278,7 +278,7 @@ def predict_next_month(
             A, la temperatura es inválida o falta historial.
     """
     db.init_structured_db(db_path)
-    if db.get_run(run_id, db_path) is None:
+    if runs.get_run(run_id) is None:
         raise ValueError(f"No existe la corrida {run_id}")
     logger.setup_logging()
     token = logger.current_run_id.set(run_id)

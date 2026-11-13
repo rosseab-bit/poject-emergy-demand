@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from src import config, data, db, features, logger, models, mongo, results
+from src import config, data, db, features, logger, models, mongo, results, runs
 
 STEP_ETL = "ETL"
 STEP_TRAINING = "Entrenamiento"
@@ -30,32 +30,18 @@ LOG_COLUMNS = [
 ]
 
 
-def _read(
-    query: str, params: tuple, path: Path | None, columns: list[str]
-) -> pd.DataFrame:
-    """Ejecuta una consulta sobre ``structured.db`` y devuelve un DataFrame."""
-    db.init_structured_db(path)
-    with db.get_connection(path) as conn:
-        rows = conn.execute(query, params).fetchall()
-    return pd.DataFrame([tuple(r) for r in rows], columns=columns)
-
-
-def list_runs(db_path: Path | None = None) -> pd.DataFrame:
-    """Lista las corridas, la más reciente primero.
-
-    Args:
-        db_path: ruta de ``structured.db``; por defecto la de ``config``.
+def list_runs() -> pd.DataFrame:
+    """Lista las corridas de MongoDB, la más reciente primero.
 
     Returns:
         DataFrame con ``RUN_COLUMNS``; vacío si no hay corridas.
     """
-    return _read(
-        f"SELECT {', '.join(RUN_COLUMNS)} FROM runs "
-        "ORDER BY started_at DESC, rowid DESC",
-        (),
-        db_path,
-        RUN_COLUMNS,
+    cursor = (
+        mongo.get_database()[mongo.RUNS]
+        .find({}, {"_id": 0})
+        .sort([("started_at", -1), ("_id", -1)])
     )
+    return pd.DataFrame(list(cursor), columns=RUN_COLUMNS)
 
 
 def report_path(run_id: str, reports_dir: Path | None = None) -> Path:
@@ -120,15 +106,12 @@ def has_predictions(run_id: str, unstructured_path: Path | None = None) -> bool:
 
 
 def run_summary(
-    run_id: str,
-    db_path: Path | None = None,
-    unstructured_path: Path | None = None,
+    run_id: str, unstructured_path: Path | None = None
 ) -> dict[str, object] | None:
     """Resume una corrida para la barra lateral.
 
     Args:
         run_id: identificador de la corrida.
-        db_path: ruta de ``structured.db``; por defecto la de ``config``.
         unstructured_path: ruta de ``unstructured.db``; por defecto la de
             ``config``.
 
@@ -137,11 +120,10 @@ def run_summary(
         hasta que se entrena) y el estado de los pasos; ``None`` si la corrida
         no existe.
     """
-    db.init_structured_db(db_path)
-    run = db.get_run(run_id, db_path)
+    run = runs.get_run(run_id)
     if run is None:
         return None
-    summary = {key: run[key] for key in RUN_COLUMNS}
+    summary = {key: run.get(key) for key in RUN_COLUMNS}
     summary["dataset_sha256"] = _config_value(
         run_id, "$.dataset_sha256", unstructured_path
     )

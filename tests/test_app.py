@@ -15,7 +15,7 @@ from support import (
 from support import start_app as run_app
 
 from app_pages.sidebar import PAGE_NAMES
-from src import config, db, models, mongo, pipeline, queries, train
+from src import config, db, models, mongo, pipeline, queries, runs, train
 
 
 def test_app_starts_without_runs(tmp_config: Path) -> None:
@@ -75,8 +75,8 @@ def test_every_page_renders(tmp_config: Path) -> None:
 def test_pending_run_is_applied_before_the_selector(tmp_config: Path) -> None:
     """Una página puede pedir otra corrida sin chocar con el selector."""
     db.init_structured_db()
-    first = db.create_run(seed=1)
-    second = db.create_run(seed=2)
+    first = runs.create_run(seed=1)
+    second = runs.create_run(seed=2)
     at = run_app()
     assert at.sidebar.selectbox[0].value == second
     at.session_state["_pending_run"] = first
@@ -114,7 +114,7 @@ def test_etl_button_creates_a_run_and_shows_results(tmp_config: Path) -> None:
     assert run_id in text
     assert "Semilla de esta corrida:** 11" in text
     assert "✅ ETL — hecho" in text
-    assert db.get_run(run_id)["seed"] == 11
+    assert runs.get_run(run_id)["seed"] == 11
 
     shown = metrics(at)
     assert shown["Meses guardados"] == "308"
@@ -185,7 +185,7 @@ def test_training_page_without_run_asks_for_etl(tmp_config: Path) -> None:
 def test_training_page_with_run_without_etl_asks_for_etl(tmp_config: Path) -> None:
     """Una corrida sin ETL hecho tampoco permite entrenar."""
     db.init_structured_db()
-    db.create_run()
+    runs.create_run()
     at = go_to(run_app(), "Entrenamiento")
     assert any("Primero ejecutá el ETL" in w.value for w in at.warning)
     assert len(at.button) == 0
@@ -275,7 +275,7 @@ def test_training_failure_is_shown_and_logged(
     at.button[0].click().run()
     assert not at.exception
     assert any("sin memoria" in e.value for e in at.error)
-    assert db.get_run(run_id)["status"] == "error"
+    assert runs.get_run(run_id)["status"] == "error"
 
 
 def test_flash_after_etl_is_shown_once(tmp_config: Path) -> None:
@@ -366,8 +366,8 @@ def test_app_explains_a_missing_env_file(tmp_config: Path, tmp_path: Path) -> No
 def test_a_second_start_does_not_touch_the_existing_data(tmp_config: Path) -> None:
     """Abrir la app otra vez conserva las corridas ya guardadas."""
     run_app()
-    run_id = db.create_run(seed=11)
+    run_id = runs.create_run(seed=11)
     at = run_app()
     assert not at.exception
-    assert user_tables(config.STRUCTURED_DB_PATH)["runs"] == 1
-    assert db.get_run(run_id)["seed"] == 11
+    assert len(queries.list_runs()) == 1
+    assert runs.get_run(run_id)["seed"] == 11

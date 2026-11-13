@@ -67,6 +67,45 @@ def isolated_mongo() -> Iterator[mongomock.MongoClient]:
         mongo.restore_client(previous)
 
 
+# Prefijo de código para un proceso hijo: carga en un MongoDB simulado nuevo lo que
+# el proceso de la prueba volcó con ``dump_mongo`` (la ruta es el último argumento).
+FRESH_MONGO_PRELUDE = (
+    "import sys; from pathlib import Path; import mongomock;"
+    "from bson import json_util; from src import mongo;"
+    "client = mongomock.MongoClient();"
+    "dump = json_util.loads(Path(sys.argv[-1]).read_text());"
+    "[client['demanda_test'][n].insert_many(d) for n, d in dump.items() if d];"
+    "mongo.use_client(client, 'demanda_test');"
+)
+
+
+def dump_mongo(client: mongomock.MongoClient, path: Path) -> Path:
+    """Vuelca el MongoDB simulado a un archivo JSON, para que lo lea un proceso hijo.
+
+    Un MongoDB simulado vive en la memoria de su proceso. El real está en un
+    servidor y lo ve cualquier proceso; esto lo imita en las pruebas de «un
+    proceso nuevo, sin memoria».
+    """
+    from bson import json_util
+
+    database = client["demanda_test"]
+    data = {
+        name: list(database[name].find({})) for name in database.list_collection_names()
+    }
+    path.write_text(json_util.dumps(data), encoding="utf-8")
+    return path
+
+
+@contextmanager
+def using_mongo(client: mongomock.MongoClient) -> Iterator[None]:
+    """Activa un MongoDB simulado ya creado (el de una fixture) dentro del bloque."""
+    previous = mongo.use_client(client, "demanda_test")
+    try:
+        yield
+    finally:
+        mongo.restore_client(previous)
+
+
 def mongo_logs(run_id: str | None = None, **filters: object) -> list[dict]:
     """Eventos de ``logs`` de la base compartida, en orden cronológico.
 
@@ -156,5 +195,5 @@ def user_tables(db_path: Path) -> dict[str, int]:
         conn.close()
 
 
-STRUCTURED_TABLES = {"datos_limpios", "datos_originales", "runs"}
+STRUCTURED_TABLES = {"datos_limpios", "datos_originales"}
 UNSTRUCTURED_TABLES = {"configuracion", "predicciones", "resultados_modelos"}

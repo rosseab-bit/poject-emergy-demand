@@ -6,7 +6,7 @@ from pathlib import Path
 import mongomock
 from support import mongo_logs
 
-from src import db, logger, mongo
+from src import db, logger, mongo, runs
 
 
 def test_full_run_is_traceable_by_run_id(
@@ -16,7 +16,7 @@ def test_full_run_is_traceable_by_run_id(
     db_path = tmp_path / "structured.db"
     logger.setup_logging()
     db.init_structured_db(db_path)
-    run_id = db.create_run(db_path=db_path)
+    run_id = runs.create_run()
     token = logger.current_run_id.set(run_id)
 
     def paso() -> None:
@@ -27,7 +27,7 @@ def test_full_run_is_traceable_by_run_id(
 
     try:
         decorated()
-        db.finish_run(run_id, "ok", db_path)
+        runs.finish_run(run_id, "ok")
     finally:
         logger.current_run_id.reset(token)
         logger.flush_logs()
@@ -36,5 +36,5 @@ def test_full_run_is_traceable_by_run_id(
     assert [e["message"] for e in events][1] == "trabajando"
     assert len(events) == 3
     assert {e["step"] for e in events} == {"paso"}
-    assert db.get_run(run_id, db_path)["status"] == "ok"
+    assert runs.get_run(run_id)["status"] == "ok"
     assert mongo_db[mongo.LOGS].count_documents({"run_id": run_id}) == 3

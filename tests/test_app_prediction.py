@@ -9,7 +9,7 @@ from streamlit.testing.v1 import AppTest
 from support import open_page as open_page_in
 from support import start_app
 
-from src import data, db, logger, pipeline, predict, queries
+from src import data, logger, pipeline, predict, queries, runs
 
 open_page = partial(open_page_in, "Predicción")
 
@@ -174,7 +174,7 @@ def test_page_does_not_break_other_pages_without_data(tmp_config: Path) -> None:
     for page in ("Predicción", "Reporte", "Datos"):
         at.sidebar.radio[0].set_value(page).run()
         assert not at.exception, page
-    assert db.get_run("noexiste") is None
+    assert runs.get_run("noexiste") is None
 
 
 def test_sidebar_marks_the_prediction_step_as_done(use_trained: dict) -> None:

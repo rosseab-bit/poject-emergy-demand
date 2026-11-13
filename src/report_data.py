@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from src import db, explain, queries, recommend, results
+from src import db, explain, queries, recommend, results, runs
 
 
 @dataclass
@@ -138,7 +138,7 @@ def collect_report_data(
         ValueError: si la corrida no existe, no tiene resultados o falta el ETL.
     """
     db.init_structured_db(db_path)
-    run = db.get_run(run_id, db_path)
+    run = runs.get_run(run_id)
     if run is None:
         raise ValueError(f"No existe la corrida {run_id}")
     table = queries.results_table(run_id, unstructured_path)
@@ -164,7 +164,7 @@ def collect_report_data(
     )
     return ReportData(
         run_id=run_id,
-        generated_at=db.now_iso(),
+        generated_at=runs.now_iso(),
         run=dict(run),
         config=config_doc,
         overview=overview,

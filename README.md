@@ -165,16 +165,9 @@ FROM resultados_modelos
 WHERE run_id = '<RUN_ID>'
 ORDER BY f1 DESC;
 
--- En structured.db: consulta cruzada entre las dos bases con ATTACH
-ATTACH DATABASE 'db/unstructured.db' AS unstructured;
-SELECT r.run_id, r.status, m.scenario, m.model,
-       ROUND(json_extract(m.doc, '$.holdout.f1'), 2) AS f1
-FROM runs r
-JOIN unstructured.resultados_modelos m ON m.run_id = r.run_id
-WHERE r.run_id = '<RUN_ID>';
 ```
 
-Los `run_id` disponibles salen de `SELECT run_id, started_at, status FROM runs;`.
+Las corridas (`runs`) y sus eventos (`logs`) están en MongoDB.
 
 ## Estructura del repositorio
 
@@ -184,9 +177,10 @@ app_pages/             Una página por módulo: datos, entrenamiento, comparaci�
                        predicción, reporte y logs
 src/
   config.py            Semilla, rutas y constantes
-  logger.py            SQLiteHandler y @log_step
+  logger.py            MongoHandler por lote y @log_step
   db.py                Acceso a las dos bases (WAL, ATTACH, checkpoint)
   mongo.py             Conexión a MongoDB: credenciales del .env y cliente compartido
+  runs.py              Corridas (colección runs de MongoDB)
   data.py              Carga y limpieza (ETL)
   features.py          Variables derivadas, rezagos y target
   models.py            Pipelines y grillas de hiperparámetros

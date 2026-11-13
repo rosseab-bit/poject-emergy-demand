@@ -11,6 +11,7 @@ import pytest
 from matplotlib.figure import Figure
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import cm
+from support import FRESH_MONGO_PRELUDE, dump_mongo
 
 from src import (
     config,
@@ -437,13 +438,14 @@ def test_a_fresh_process_generates_the_same_report(
     trained_run: dict, tmp_path: Path
 ) -> None:
     """Un proceso nuevo, sin memoria, genera un reporte con la misma conclusión."""
-    code = (
-        "import sys, json; from pathlib import Path; from src import report;"
+    code = FRESH_MONGO_PRELUDE + (
+        "import json; from src import report;"
         "a = sys.argv; pdf = report.generate_report(a[1], True, Path(a[2]), Path(a[3]),"
         " Path(a[4]), page_compression=0); Path(a[5]).write_bytes(pdf);"
         "print(json.dumps({'n': len(pdf), 'streamlit': 'streamlit' in sys.modules}))"
     )
     out = tmp_path / "hijo.pdf"
+    dump = dump_mongo(trained_run["mongo"], tmp_path / "mongo.json")
     done = subprocess.run(
         [
             sys.executable,
@@ -454,6 +456,7 @@ def test_a_fresh_process_generates_the_same_report(
             str(trained_run["unstructured_path"]),
             str(trained_run["models_dir"]),
             str(out),
+            str(dump),
         ],
         cwd=config.ROOT_DIR,
         capture_output=True,

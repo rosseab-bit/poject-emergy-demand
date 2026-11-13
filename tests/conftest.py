@@ -7,7 +7,7 @@ from pathlib import Path
 import mongomock
 import pytest
 import streamlit as st
-from support import isolated_logging, isolated_mongo, tiny_grids
+from support import isolated_logging, isolated_mongo, tiny_grids, using_mongo
 
 from src import config, logger, mongo, pipeline
 
@@ -145,10 +145,11 @@ def trained_report_data(trained_run: dict):
     """Datos del reporte de la corrida entrenada (LR y RF en A y B), sin predicciones."""
     from src import report_data
 
-    return report_data.collect_report_data(
-        trained_run["run_id"],
-        include_predictions=False,
-        db_path=trained_run["db_path"],
-        unstructured_path=trained_run["unstructured_path"],
-        models_dir=trained_run["models_dir"],
-    )
+    with using_mongo(trained_run["mongo"]):
+        return report_data.collect_report_data(
+            trained_run["run_id"],
+            include_predictions=False,
+            db_path=trained_run["db_path"],
+            unstructured_path=trained_run["unstructured_path"],
+            models_dir=trained_run["models_dir"],
+        )

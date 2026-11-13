@@ -38,23 +38,6 @@ def trained(tmp_path_factory: pytest.TempPathFactory) -> dict:
     return {"run_id": run_id, "mongo": client, **paths}
 
 
-def test_list_runs_empty_database_returns_empty_frame(paths: dict) -> None:
-    """Sin corridas devuelve un DataFrame vacío con las columnas."""
-    runs = queries.list_runs(paths["db_path"])
-    assert runs.empty
-    assert list(runs.columns) == queries.RUN_COLUMNS
-
-
-def test_list_runs_newest_first(paths: dict) -> None:
-    """La corrida más reciente aparece primero."""
-    db.init_structured_db(paths["db_path"])
-    first = db.create_run(db_path=paths["db_path"])
-    second = db.create_run(seed=3, db_path=paths["db_path"])
-    runs = queries.list_runs(paths["db_path"])
-    assert runs["run_id"].tolist() == [second, first]
-    assert runs["seed"].tolist() == [3, config.SEED]
-
-
 def test_steps_after_etl_and_after_training(trained: dict, paths: dict) -> None:
     """El ETL se detecta en logs y el entrenamiento por los resultados."""
     steps = queries.run_steps(trained["run_id"], trained["unstructured_path"])
@@ -77,7 +60,7 @@ def paths_of(trained: dict) -> dict:
 
 def test_run_summary_with_hash_and_steps(trained: dict) -> None:
     """El resumen trae estado, semilla, hash del dataset y pasos."""
-    summary = queries.run_summary(trained["run_id"], **paths_of(trained))
+    summary = queries.run_summary(trained["run_id"], trained["unstructured_path"])
     assert summary["status"] == "ok"
     assert summary["seed"] == 7
     assert summary["dataset_sha256"] == results.file_sha256(config.RAW_CSV_PATH)
@@ -86,9 +69,9 @@ def test_run_summary_with_hash_and_steps(trained: dict) -> None:
 
 def test_run_summary_unknown_run_and_untrained_run(paths: dict) -> None:
     """Corrida inexistente da None; sin entrenar, el hash es None."""
-    assert queries.run_summary("noexiste", **paths) is None
+    assert queries.run_summary("noexiste", paths["unstructured_path"]) is None
     run_id = pipeline.run_etl(db_path=paths["db_path"])
-    summary = queries.run_summary(run_id, **paths)
+    summary = queries.run_summary(run_id, paths["unstructured_path"])
     assert summary["dataset_sha256"] is None
     assert summary["steps"]["ETL"] is True
 

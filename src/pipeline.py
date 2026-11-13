@@ -5,7 +5,18 @@ import logging
 from collections.abc import Callable
 from pathlib import Path
 
-from src import config, data, db, features, logger, models, mongo, results, train
+from src import (
+    config,
+    data,
+    db,
+    features,
+    logger,
+    models,
+    mongo,
+    results,
+    runs,
+    train,
+)
 
 log = logging.getLogger(__name__)
 
@@ -74,14 +85,14 @@ def _run_registered(
     logger.setup_logging()
     db.init_structured_db(db_path)
     if run_id is None:
-        run_id = db.create_run(seed=seed, db_path=db_path)
+        run_id = runs.create_run(seed=seed)
     token = logger.current_run_id.set(run_id)
     try:
         steps()
-        db.finish_run(run_id, "ok", db_path)
+        runs.finish_run(run_id, runs.STATUS_OK)
         log.info("Corrida terminada: run_id=%s", run_id)
     except Exception:
-        db.finish_run(run_id, "error", db_path)
+        runs.finish_run(run_id, runs.STATUS_ERROR)
         raise
     finally:
         logger.current_run_id.reset(token)
@@ -146,7 +157,7 @@ def run_training(
             resultados (para volver a entrenar hay que iniciar otra corrida).
     """
     db.init_structured_db(db_path)
-    run = db.get_run(run_id, db_path)
+    run = runs.get_run(run_id)
     if run is None:
         raise ValueError(f"No existe la corrida {run_id}")
     if data.load_clean_data(db_path).empty:

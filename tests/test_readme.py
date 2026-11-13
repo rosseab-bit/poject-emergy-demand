@@ -131,7 +131,7 @@ def test_the_sql_examples_run_on_empty_databases(tmp_path: Path) -> None:
     structured, unstructured = tmp_path / "s.db", tmp_path / "u.db"
     db.init_databases(structured, unstructured)
     sql = "\n".join(code_blocks("sql"))
-    assert "json_extract" in sql and "ATTACH" in sql
+    assert "json_extract" in sql
     only_unstructured = sqlite3.connect(unstructured)
     both = sqlite3.connect(structured)
     both.execute(f"ATTACH DATABASE '{unstructured}' AS unstructured")

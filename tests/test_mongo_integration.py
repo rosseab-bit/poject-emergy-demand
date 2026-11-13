@@ -13,7 +13,7 @@ from collections.abc import Iterator
 import pytest
 from pymongo.collection import Collection
 
-from src import logger, mongo
+from src import logger, mongo, queries, runs
 
 pytestmark = pytest.mark.mongo
 
@@ -75,3 +75,19 @@ def test_logger_batch_roundtrip_on_the_real_cluster(
     assert {d["step"] for d in docs} == {"paso"}
     assert docs[0]["ts"].year >= 2026  # datetime guardado como fecha, no como texto
     assert elapsed < 5  # 50 eventos en un solo viaje, no 50 viajes
+
+
+def test_runs_roundtrip_on_the_real_cluster(real_cluster: None) -> None:
+    """Crear, cerrar y leer una corrida funciona contra Atlas (base de pruebas)."""
+    settings = mongo.load_settings()
+    mongo.use_client(mongo.get_client(), f"{settings.db_name}_tests")
+    runs_collection = mongo.get_database()[mongo.RUNS]
+    try:
+        run_id = runs.create_run(seed=123, notes="integración")
+        assert runs.get_run(run_id)["status"] == "running"
+        runs.finish_run(run_id, runs.STATUS_OK)
+        run = runs.get_run(run_id)
+        assert (run["status"], run["seed"]) == ("ok", 123)
+        assert queries.list_runs()["run_id"].tolist()[0] == run_id
+    finally:
+        runs_collection.drop()

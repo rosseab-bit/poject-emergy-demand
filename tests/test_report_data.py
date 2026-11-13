@@ -10,7 +10,13 @@ import sys
 from pathlib import Path
 
 import pytest
-from support import isolated_logging, isolated_mongo, tiny_grids
+from support import (
+    FRESH_MONGO_PRELUDE,
+    dump_mongo,
+    isolated_logging,
+    isolated_mongo,
+    tiny_grids,
+)
 
 from src import (
     config,
@@ -24,6 +30,7 @@ from src import (
     report_charts,
     report_data,
     results,
+    runs,
 )
 
 LR = ("logistic_regression",)
@@ -151,7 +158,7 @@ def test_unknown_untrained_or_missing_etl_runs_are_rejected(
         "models_dir": tmp_path / "m",
     }
     db.init_structured_db(empty["db_path"])
-    run_id = db.create_run(db_path=empty["db_path"])
+    run_id = runs.create_run()
     with pytest.raises(ValueError, match="primero entrenala"):
         collect(empty | {"run_id": run_id})
 
@@ -191,11 +198,11 @@ def test_collecting_adds_no_events_to_logs(report_run: dict) -> None:
 
 
 def test_data_comes_only_from_the_databases_even_in_a_fresh_process(
-    report_run: dict,
+    report_run: dict, tmp_path: Path
 ) -> None:
     """Un proceso nuevo, sin memoria, arma los mismos datos solo desde el disco."""
-    code = (
-        "import sys, json; from pathlib import Path; from src import report_data as r;"
+    code = FRESH_MONGO_PRELUDE + (
+        "import json; from src import report_data as r;"
         "a = sys.argv; d = r.collect_report_data(a[1], db_path=Path(a[2]),"
         " unstructured_path=Path(a[3]), models_dir=Path(a[4]));"
         "print(json.dumps({'seed': d.config['seed'], 'sha': d.config['dataset_sha256'],"
@@ -203,6 +210,7 @@ def test_data_comes_only_from_the_databases_even_in_a_fresh_process(
         " 'cat': {k: c.verdict.category for k, c in d.conclusions.items()},"
         " 'head': d.conclusions['A'].explanation.headline}))"
     )
+    dump = dump_mongo(report_run["mongo"], tmp_path / "mongo.json")
     done = subprocess.run(
         [
             sys.executable,
@@ -212,6 +220,7 @@ def test_data_comes_only_from_the_databases_even_in_a_fresh_process(
             str(report_run["db_path"]),
             str(report_run["unstructured_path"]),
             str(report_run["models_dir"]),
+            str(dump),
         ],
         cwd=config.ROOT_DIR,
         capture_output=True,
@@ -278,11 +287,6 @@ def test_report_needs_the_clean_data_too(report_run: dict, tmp_path: Path) -> No
     """Con resultados guardados pero sin datos limpios (ETL borrado), lo dice."""
     empty_structured = tmp_path / "structured.db"
     db.init_structured_db(empty_structured)
-    with db.get_connection(empty_structured) as conn:
-        conn.execute(
-            "INSERT INTO runs (run_id, started_at, status, seed) VALUES (?, 'ahora', 'ok', 7)",
-            (report_run["run_id"],),
-        )
     with pytest.raises(ValueError, match="ejecutá el ETL"):
         report_data.collect_report_data(
             report_run["run_id"],
