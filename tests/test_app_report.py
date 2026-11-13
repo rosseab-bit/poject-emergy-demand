@@ -10,7 +10,7 @@ from support import open_page as open_page_in
 from support import sidebar_text
 
 from app_pages import reporte
-from src import config, pipeline, queries, report
+from src import config, logger, pipeline, queries, report
 
 open_page = partial(open_page_in, "Reporte", timeout=300)
 
@@ -99,7 +99,7 @@ def test_generating_leaves_an_event_in_logs_under_the_run(
 ) -> None:
     """Generar el reporte queda registrado en logs, atado al run_id."""
     open_page().button[0].click().run(timeout=300)
-    logs = queries.get_logs(use_trained["run_id"], db_path=use_trained["db_path"])
+    logs = queries.get_logs(use_trained["run_id"])
     assert logs["message"].str.startswith("Reporte generado: reporte_").any()
     assert logs["run_id"].notna().all()
 
@@ -152,9 +152,11 @@ def test_viewing_the_page_adds_no_events_to_logs(
     use_trained: dict, reports_dir: Path
 ) -> None:
     """Mirar la página no escribe en logs; solo generar el reporte lo hace."""
-    before = len(queries.get_logs(db_path=use_trained["db_path"]))
+    logger.flush_logs()
+    before = len(queries.get_logs())
     open_page()
-    assert len(queries.get_logs(db_path=use_trained["db_path"])) == before
+    logger.flush_logs()
+    assert len(queries.get_logs()) == before
 
 
 @pytest.mark.skipif(

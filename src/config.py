@@ -3,6 +3,7 @@
 La semilla y las rutas se definen solo acá; el resto del código las importa.
 """
 
+import os
 from pathlib import Path
 
 # Semilla única para toda la aleatoriedad del proyecto.
@@ -18,9 +19,50 @@ REPORTS_DIR: Path = ROOT_DIR / "reports"
 # Dataset original (no se modifica nunca).
 RAW_CSV_PATH: Path = DATA_RAW_DIR / "demanda_electricidad_original_mensual2.csv"
 
-# Bases SQLite.
+# Base SQLite con los datasets (original y limpio).
 STRUCTURED_DB_PATH: Path = DB_DIR / "structured.db"
-UNSTRUCTURED_DB_PATH: Path = DB_DIR / "unstructured.db"
+
+# Columnas del CSV original, en orden: la tabla ``datos_originales`` de SQLite
+# las guarda todas, sin modificar. Un test comprueba que coincidan con el archivo.
+RAW_COLUMNS: tuple[str, ...] = (
+    "indice_tiempo",
+    "demanda_total",
+    "demanda_residencial",
+    "comercio_e_industria",
+    "grandes_usuarios",
+    "temperatura_promedio",
+    "potencia_maxima",
+    "ede_tucuman",
+    "edelap_sa",
+    "edenor_distribuidor",
+    "edesal_distribuidor",
+    "edestesa_emp_dist__este",
+    "edesur_distribuidor",
+    "emp_de_energia_de_rio_negro_sa",
+    "emp_dist_energ_atlantica",
+    "emp_de_energia_de_la_rioja_sa",
+    "emp_dist_energia_de_salta",
+    "emp_electric_misiones_sa",
+    "empresa_dis_estero_sa",
+    "empresa_jujenia_de_energia_sa",
+    "energia_de_catamarca_sa",
+    "energia_de_entre_rios_sa",
+    "energia_de_mendoza_sa",
+    "energia_san_juan_sa_exedessa",
+    "epec_distribuidor",
+    "epen_distribuidor",
+    "epesf_distribuidor",
+    "recursos_y_energia_formosa_sa",
+    "secheep",
+    "spse_santa_cruz",
+)
+
+# MongoDB (Atlas): credenciales en un .env que no se sube a Git.
+# ``TP_ENV_PATH`` permite apuntar a otro archivo (los tests lo usan para que nunca
+# lleguen al cluster real).
+ENV_PATH: Path = Path(os.environ.get("TP_ENV_PATH") or ROOT_DIR / ".env")
+MONGO_DB_NAME: str = "demanda_electrica"
+MONGO_TIMEOUT_MS: int = 10_000
 
 # Validación temporal: meses finales reservados como hold-out (12 positivos
 # en los últimos 48 meses, contra 7 en 36) y cortes de TimeSeriesSplit en el

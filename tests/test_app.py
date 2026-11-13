@@ -2,11 +2,11 @@
 
 from pathlib import Path
 
+import mongomock
 import pytest
 from streamlit.testing.v1 import AppTest
 from support import (
     STRUCTURED_TABLES,
-    UNSTRUCTURED_TABLES,
     go_to,
     sidebar_text,
     user_tables,
@@ -14,7 +14,7 @@ from support import (
 from support import start_app as run_app
 
 from app_pages.sidebar import PAGE_NAMES
-from src import config, db, models, pipeline, queries, train
+from src import config, db, models, mongo, pipeline, queries, runs, train
 
 
 def test_app_starts_without_runs(tmp_config: Path) -> None:
@@ -74,8 +74,8 @@ def test_every_page_renders(tmp_config: Path) -> None:
 def test_pending_run_is_applied_before_the_selector(tmp_config: Path) -> None:
     """Una página puede pedir otra corrida sin chocar con el selector."""
     db.init_structured_db()
-    first = db.create_run(seed=1)
-    second = db.create_run(seed=2)
+    first = runs.create_run(seed=1)
+    second = runs.create_run(seed=2)
     at = run_app()
     assert at.sidebar.selectbox[0].value == second
     at.session_state["_pending_run"] = first
@@ -113,7 +113,7 @@ def test_etl_button_creates_a_run_and_shows_results(tmp_config: Path) -> None:
     assert run_id in text
     assert "Semilla de esta corrida:** 11" in text
     assert "✅ ETL — hecho" in text
-    assert db.get_run(run_id)["seed"] == 11
+    assert runs.get_run(run_id)["seed"] == 11
 
     shown = metrics(at)
     assert shown["Meses guardados"] == "308"
@@ -184,7 +184,7 @@ def test_training_page_without_run_asks_for_etl(tmp_config: Path) -> None:
 def test_training_page_with_run_without_etl_asks_for_etl(tmp_config: Path) -> None:
     """Una corrida sin ETL hecho tampoco permite entrenar."""
     db.init_structured_db()
-    db.create_run()
+    runs.create_run()
     at = go_to(run_app(), "Entrenamiento")
     assert any("Primero ejecutá el ETL" in w.value for w in at.warning)
     assert len(at.button) == 0
@@ -274,7 +274,7 @@ def test_training_failure_is_shown_and_logged(
     at.button[0].click().run()
     assert not at.exception
     assert any("sin memoria" in e.value for e in at.error)
-    assert db.get_run(run_id)["status"] == "error"
+    assert runs.get_run(run_id)["status"] == "error"
 
 
 def test_flash_after_etl_is_shown_once(tmp_config: Path) -> None:
@@ -298,23 +298,72 @@ def test_sidebar_survives_a_run_whose_summary_cannot_be_read(
     assert "Estado:" not in sidebar_text(at)
 
 
-def test_first_start_creates_both_databases_empty(tmp_config: Path) -> None:
-    """Un clon recién descargado no trae bases: al abrir la app aparecen vacías."""
+def test_first_start_creates_the_sqlite_database_empty(tmp_config: Path) -> None:
+    """Un clon recién descargado no trae la base: al abrir la app aparece vacía."""
     assert not config.STRUCTURED_DB_PATH.exists()
-    assert not config.UNSTRUCTURED_DB_PATH.exists()
     at = run_app()
     assert not at.exception
     assert user_tables(config.STRUCTURED_DB_PATH) == dict.fromkeys(STRUCTURED_TABLES, 0)
-    assert user_tables(config.UNSTRUCTURED_DB_PATH) == dict.fromkeys(
-        UNSTRUCTURED_TABLES, 0
-    )
+    assert not (config.STRUCTURED_DB_PATH.parent / "unstructured.db").exists()
+
+
+def test_first_start_creates_the_mongodb_collections(
+    tmp_config: Path, mongo_db: mongomock.Database
+) -> None:
+    """Al abrir la app por primera vez aparecen las colecciones de MongoDB."""
+    assert mongo_db.list_collection_names() == []
+    at = run_app()
+    assert not at.exception
+    assert set(mongo_db.list_collection_names()) == set(mongo.COLLECTIONS)
+
+
+def test_mongodb_is_prepared_once_not_on_every_click(
+    tmp_config: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Cada clic vuelve a ejecutar el script, pero MongoDB se prepara una sola vez."""
+    calls: list[int] = []
+    real = mongo.init_mongo
+    monkeypatch.setattr(mongo, "init_mongo", lambda *a: calls.append(1) or real(*a))
+    at = run_app()
+    go_to(at, "Logs")
+    go_to(at, "Datos")
+    assert not at.exception
+    assert calls == [1]
+
+
+def test_app_explains_when_mongodb_is_not_available(
+    tmp_config: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Sin MongoDB la app lo dice con claridad y no sigue (sin tracebacks)."""
+
+    def unavailable(*args: object) -> None:
+        raise mongo.MongoUnavailableError("No se pudo conectar a MongoDB: sin red")
+
+    monkeypatch.setattr(mongo, "init_mongo", unavailable)
+    at = run_app()
+    assert not at.exception
+    assert any("No se pudo preparar MongoDB" in e.value for e in at.error)
+    assert any(".env.example" in i.value for i in at.info)
+    assert len(at.sidebar.radio) == 0  # no dibujó la app
+
+
+def test_app_explains_a_missing_env_file(tmp_config: Path, tmp_path: Path) -> None:
+    """Sin ``.env`` el mensaje indica cómo configurarlo."""
+    mongo.reset_client()
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(config, "ENV_PATH", tmp_path / "sin_env")
+        for name in (mongo.ENV_URI, mongo.ENV_PASSWORD, mongo.ENV_DB_NAME):
+            patch.delenv(name, raising=False)
+        at = run_app()
+    assert not at.exception
+    assert any("Copiá .env.example" in e.value for e in at.error)
 
 
 def test_a_second_start_does_not_touch_the_existing_data(tmp_config: Path) -> None:
     """Abrir la app otra vez conserva las corridas ya guardadas."""
     run_app()
-    run_id = db.create_run(seed=11)
+    run_id = runs.create_run(seed=11)
     at = run_app()
     assert not at.exception
-    assert user_tables(config.STRUCTURED_DB_PATH)["runs"] == 1
-    assert db.get_run(run_id)["seed"] == 11
+    assert len(queries.list_runs()) == 1
+    assert runs.get_run(run_id)["seed"] == 11

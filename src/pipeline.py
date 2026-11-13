@@ -5,7 +5,18 @@ import logging
 from collections.abc import Callable
 from pathlib import Path
 
-from src import config, data, db, features, logger, models, results, train
+from src import (
+    config,
+    data,
+    db,
+    features,
+    logger,
+    models,
+    mongo,
+    results,
+    runs,
+    train,
+)
 
 log = logging.getLogger(__name__)
 
@@ -13,7 +24,8 @@ log = logging.getLogger(__name__)
 @logger.log_step
 def run_etl_steps(csv_path: Path | None, db_path: Path | None) -> int:
     """Carga, limpia, guarda, deriva variables y target. Devuelve filas guardadas."""
-    df = data.load_raw(csv_path)
+    df = data.load_raw(csv_path)  # valida columnas y fechas antes de guardar
+    data.save_raw_data(csv_path, db_path)
     data.check_sector_nulls(df)
     cleaned = data.flag_repeated_power(df)
     log.info("Filas completas tras la limpieza: %d", data.count_complete_rows(cleaned))
@@ -40,18 +52,15 @@ def run_training_steps(
 @logger.log_step
 def run_saving_steps(
     run_id: str,
-    runs: list[train.ModelRun],
+    model_runs: list[train.ModelRun],
     csv_path: Path | None,
-    unstructured_path: Path | None,
     models_dir: Path | None,
     seed: int = config.SEED,
 ) -> None:
     """Guarda la configuración y cada resultado (con su modelo) de la corrida."""
-    results.save_run_config(
-        run_id, results.build_run_config(csv_path, seed), unstructured_path
-    )
-    for run in runs:
-        results.save_model_run(run_id, run, models_dir, unstructured_path)
+    results.save_run_config(run_id, results.build_run_config(csv_path, seed))
+    for model_run in model_runs:
+        results.save_model_run(run_id, model_run, models_dir)
 
 
 def _run_registered(
@@ -59,35 +68,31 @@ def _run_registered(
     db_path: Path | None,
     seed: int = config.SEED,
     run_id: str | None = None,
-    unstructured_path: Path | None = None,
-    with_unstructured: bool = False,
 ) -> str:
-    """Ejecuta ``steps`` como una corrida registrada en ``runs`` y ``logs``.
+    """Ejecuta ``steps`` como una corrida registrada en ``runs`` y en ``logs``.
 
     Crea el ``run_id`` (o continúa el que se pasa), lo deja activo para el
     logger y cierra la corrida con estado ``ok`` o ``error`` (relanzando el
-    error). Al terminar vuelca el WAL de las bases al archivo principal, así los
-    ``.db`` quedan completos por sí solos; ``with_unstructured`` indica si la
-    corrida también escribió en ``unstructured.db``.
+    error). Al terminar envía los eventos pendientes del logger y vuelca el WAL
+    de ``structured.db`` al archivo principal, así el ``.db`` queda completo por
+    sí solo.
     """
-    logger.setup_logging(db_path)
+    logger.setup_logging()
     db.init_structured_db(db_path)
     if run_id is None:
-        run_id = db.create_run(seed=seed, db_path=db_path)
+        run_id = runs.create_run(seed=seed)
     token = logger.current_run_id.set(run_id)
     try:
         steps()
-        db.finish_run(run_id, "ok", db_path)
+        runs.finish_run(run_id, runs.STATUS_OK)
         log.info("Corrida terminada: run_id=%s", run_id)
     except Exception:
-        db.finish_run(run_id, "error", db_path)
+        runs.finish_run(run_id, runs.STATUS_ERROR)
         raise
     finally:
         logger.current_run_id.reset(token)
-        if with_unstructured:
-            db.checkpoint_all(db_path, unstructured_path)
-        else:
-            db.checkpoint(db_path)
+        logger.flush_logs()
+        db.checkpoint(db_path)
     return run_id
 
 
@@ -112,7 +117,6 @@ def run_etl(
 def run_training(
     run_id: str,
     db_path: Path | None = None,
-    unstructured_path: Path | None = None,
     models_dir: Path | None = None,
     csv_path: Path | None = None,
     scenarios: tuple[str, ...] = ("A", "B"),
@@ -123,13 +127,12 @@ def run_training(
 
     Continúa el ``run_id`` que dejó el ETL: usa la semilla de esa corrida y
     deja el entrenamiento, los resultados y los modelos atados al mismo
-    ``run_id`` en ``runs``, ``logs`` y ``unstructured.db``.
+    ``run_id`` en ``runs``, ``logs``, ``resultados_modelos`` y ``configuracion``
+    de MongoDB.
 
     Args:
         run_id: corrida existente, con el ETL ya ejecutado.
         db_path: ruta de ``structured.db``; por defecto la de ``config``.
-        unstructured_path: ruta de ``unstructured.db``; por defecto la de
-            ``config``.
         models_dir: carpeta de los ``.joblib``; por defecto ``config.MODELS_DIR``.
         csv_path: CSV original (para el hash de la configuración).
         scenarios: escenarios a entrenar.
@@ -144,46 +147,36 @@ def run_training(
             resultados (para volver a entrenar hay que iniciar otra corrida).
     """
     db.init_structured_db(db_path)
-    run = db.get_run(run_id, db_path)
+    run = runs.get_run(run_id)
     if run is None:
         raise ValueError(f"No existe la corrida {run_id}")
     if data.load_clean_data(db_path).empty:
         raise ValueError("Primero ejecutá el ETL: datos_limpios está vacía")
-    if results.has_results(run_id, unstructured_path):
+    if results.has_results(run_id):
         raise ValueError(f"La corrida {run_id} ya tiene resultados; iniciá otra")
     seed = run["seed"]
 
     def steps() -> None:
-        runs = run_training_steps(db_path, seed, scenarios, model_names, on_progress)
-        run_saving_steps(run_id, runs, csv_path, unstructured_path, models_dir, seed)
+        trained = run_training_steps(db_path, seed, scenarios, model_names, on_progress)
+        run_saving_steps(run_id, trained, csv_path, models_dir, seed)
 
-    return _run_registered(
-        steps,
-        db_path,
-        seed,
-        run_id=run_id,
-        unstructured_path=unstructured_path,
-        with_unstructured=True,
-    )
+    return _run_registered(steps, db_path, seed, run_id=run_id)
 
 
 def run_pipeline(
     csv_path: Path | None = None,
     db_path: Path | None = None,
-    unstructured_path: Path | None = None,
     models_dir: Path | None = None,
     seed: int = config.SEED,
 ) -> str:
     """Ejecuta ETL, entrenamiento y guardado en una misma corrida registrada.
 
     Los resultados, la configuración y los modelos quedan atados al mismo
-    ``run_id`` que ``runs`` y ``logs``.
+    ``run_id`` que ``runs`` y ``logs``, en MongoDB.
 
     Args:
         csv_path: CSV de entrada; por defecto el de ``data/raw/``.
         db_path: ruta de ``structured.db``; por defecto la de ``config``.
-        unstructured_path: ruta de ``unstructured.db``; por defecto la de
-            ``config``.
         models_dir: carpeta de los ``.joblib``; por defecto ``config.MODELS_DIR``.
         seed: semilla de la corrida; por defecto ``config.SEED``.
 
@@ -193,17 +186,11 @@ def run_pipeline(
 
     def steps() -> None:
         run_etl_steps(csv_path, db_path)
-        runs = run_training_steps(db_path, seed)
+        trained = run_training_steps(db_path, seed)
         run_id = logger.current_run_id.get()
-        run_saving_steps(run_id, runs, csv_path, unstructured_path, models_dir, seed)
+        run_saving_steps(run_id, trained, csv_path, models_dir, seed)
 
-    return _run_registered(
-        steps,
-        db_path,
-        seed,
-        unstructured_path=unstructured_path,
-        with_unstructured=True,
-    )
+    return _run_registered(steps, db_path, seed)
 
 
 def _non_negative_int(text: str) -> int:
@@ -256,7 +243,8 @@ def main(argv: list[str] | None = None) -> int:
         argv: argumentos de la línea de comandos; por defecto ``sys.argv[1:]``.
 
     Returns:
-        Código de salida: 0 si la corrida terminó bien y 1 si falló.
+        Código de salida: 0 si la corrida terminó bien y 1 si falló o si no se
+        pudo preparar MongoDB (falta el ``.env``, sin conexión o credenciales).
     """
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -265,7 +253,12 @@ def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(
         level=logging.INFO, format="%(levelname)s %(name)s: %(message)s"
     )
-    db.init_databases()  # en el primer arranque de un clon crea las bases vacías
+    try:
+        db.init_structured_db()  # en el primer arranque de un clon crea la base
+        mongo.init_mongo()  # y las colecciones de MongoDB con sus índices
+    except (mongo.MongoConfigError, mongo.MongoUnavailableError) as error:
+        log.error("No se pudo preparar MongoDB: %s", error)
+        return 1
     try:
         run_id = (
             run_etl(seed=args.seed) if args.solo_etl else run_pipeline(seed=args.seed)
@@ -273,7 +266,9 @@ def main(argv: list[str] | None = None) -> int:
         if args.reporte:
             from src import report  # solo si se pide: carga ReportLab y matplotlib
 
-            log.info("Reporte guardado en %s", report.save_report(run_id))
+            saved = report.save_report(run_id)
+            with logger.run_context(run_id):  # el aviso también es de la corrida
+                log.info("Reporte guardado en %s", saved)
     except Exception as error:  # noqa: BLE001 - el detalle ya quedó en logs
         log.error("La corrida falló: %s: %s", type(error).__name__, error)
         return 1

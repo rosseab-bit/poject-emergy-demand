@@ -20,7 +20,6 @@ def two_runs(
 ) -> dict:
     """Una corrida fallida (CSV inválido) y otra exitosa, la más reciente."""
     monkeypatch.setattr(config, "STRUCTURED_DB_PATH", tmp_path / "structured.db")
-    monkeypatch.setattr(config, "UNSTRUCTURED_DB_PATH", tmp_path / "unstructured.db")
     bad = tmp_path / "malo.csv"
     bad.write_text("a,b\n1,2\n")
     with pytest.raises(ValueError, match="Faltan columnas"):
@@ -35,7 +34,6 @@ def test_logs_page_without_data(
 ) -> None:
     """Sin corridas ni eventos avisa, sin errores."""
     monkeypatch.setattr(config, "STRUCTURED_DB_PATH", tmp_path / "s.db")
-    monkeypatch.setattr(config, "UNSTRUCTURED_DB_PATH", tmp_path / "u.db")
     at = open_page()
     assert not at.exception
     assert any("No hay eventos" in i.value for i in at.info)
@@ -107,18 +105,21 @@ def test_level_and_status_always_carry_an_icon_not_only_color() -> None:
     """Errores y advertencias llevan ícono y texto, no solo color."""
     logs = pd.DataFrame(
         {
-            "ts": ["t"] * 3,
+            "ts": pd.to_datetime(["2026-01-01 10:00:00.123"] * 3),
             "level": ["INFO", "WARNING", "ERROR"],
             "module": ["m"] * 3,
             "message": ["a", "b", "c"],
             "run_id": ["r"] * 3,
+            "step": [None, "paso", "paso"],
+            "event": [None, "fin", "error"],
+            "duration_ms": [None, 1500.0, 20.0],
         }
     )
-    assert tables.logs_for_display(logs)["Nivel"].tolist() == [
-        "INFO",
-        "⚠️ WARNING",
-        "❌ ERROR",
-    ]
+    shown = tables.logs_for_display(logs)
+    assert shown["Nivel"].tolist() == ["INFO", "⚠️ WARNING", "❌ ERROR"]
+    assert shown["Fecha (UTC)"].tolist() == ["2026-01-01 10:00:00"] * 3
+    assert shown["Evento"].tolist()[1:] == ["fin", "error"]
+    assert shown["Duración (s)"].tolist()[1:] == [1.5, 0.02]
 
 
 def test_highlight_row_colors_errors_and_warnings_only() -> None:

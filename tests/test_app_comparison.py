@@ -17,7 +17,6 @@ def test_comparison_without_results_asks_to_train(
 ) -> None:
     """Sin resultados pide entrenar y no dibuja nada más."""
     monkeypatch.setattr(config, "STRUCTURED_DB_PATH", tmp_path / "s.db")
-    monkeypatch.setattr(config, "UNSTRUCTURED_DB_PATH", tmp_path / "u.db")
     at = open_page()
     assert not at.exception
     assert any("Primero entrená" in w.value for w in at.warning)

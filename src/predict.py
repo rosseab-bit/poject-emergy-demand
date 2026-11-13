@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from src import config, data, db, features, logger, results
+from src import data, db, features, logger, mongo, results, runs
 from src.data import DATE_COLUMN, validate_monthly_dates
 
 log = logging.getLogger(__name__)
@@ -131,7 +131,6 @@ def build_input(clean: pd.DataFrame, temperature: float) -> PredictionInput:
 def predict_models(
     run_id: str,
     prediction_input: PredictionInput,
-    unstructured_path: Path | None = None,
     models_dir: Path | None = None,
 ) -> dict[str, dict[str, object]]:
     """Predice con los modelos guardados de una corrida (escenario A).
@@ -142,8 +141,6 @@ def predict_models(
     Args:
         run_id: identificador de la corrida.
         prediction_input: salida de ``build_input``.
-        unstructured_path: ruta de ``unstructured.db``; por defecto la de
-            ``config``.
         models_dir: carpeta de modelos; por defecto ``config.MODELS_DIR``.
 
     Returns:
@@ -156,14 +153,14 @@ def predict_models(
         ValueError: si la corrida no tiene modelos del escenario A.
         ValueError: si algún archivo no coincide con su hash.
     """
-    names = results.saved_models(run_id, SCENARIO, unstructured_path)
+    names = results.saved_models(run_id, SCENARIO)
     if not names:
         raise ValueError(
             f"La corrida {run_id} no tiene el escenario {SCENARIO} entrenado."
         )
     predictions = {}
     for name in names:
-        doc = results.load_result(run_id, SCENARIO, name, unstructured_path)
+        doc = results.load_result(run_id, SCENARIO, name)
         estimator = results.load_model(doc, models_dir)
         x = prediction_input.features[doc["features"]]
         reference = doc["baselines"]["siempre_alta"]["f1"]
@@ -197,28 +194,23 @@ def build_prediction_doc(
     }
 
 
-def save_prediction(
-    run_id: str, doc: dict[str, object], unstructured_path: Path | None = None
-) -> int:
+def save_prediction(run_id: str, doc: dict[str, object]) -> str:
     """Guarda una predicción en la colección ``predicciones``.
 
     Args:
         run_id: corrida cuyos modelos se usaron.
         doc: documento de ``build_prediction_doc``.
-        unstructured_path: ruta de ``unstructured.db``; por defecto la de
-            ``config``.
 
     Returns:
-        El ``id`` de la fila guardada.
+        El ``id`` corto (8 caracteres hexadecimales) de la predicción guardada.
     """
-    path = unstructured_path or config.UNSTRUCTURED_DB_PATH
-    db.init_unstructured_db(path)
-    with db.get_connection(path) as conn:
-        cursor = conn.execute(
-            "INSERT INTO predicciones (run_id, created_at, doc) VALUES (?, ?, ?)",
-            (run_id, db.now_iso(), results.to_json(doc)),
+    prediction_id = runs.new_run_id()
+    mongo.get_database()[mongo.PREDICTIONS].insert_one(
+        results.to_document(
+            doc, run_id=run_id, created_at=runs.now_iso(), id=prediction_id
         )
-        return int(cursor.lastrowid)
+    )
+    return prediction_id
 
 
 @logger.log_step
@@ -226,21 +218,18 @@ def _predict_and_save(
     run_id: str,
     temperature: float,
     db_path: Path | None,
-    unstructured_path: Path | None,
     models_dir: Path | None,
 ) -> dict[str, object]:
     """Arma la entrada, predice con los tres modelos y guarda el resultado."""
     prediction_input = build_input(data.load_clean_data(db_path), temperature)
-    predictions = predict_models(
-        run_id, prediction_input, unstructured_path, models_dir
-    )
+    predictions = predict_models(run_id, prediction_input, models_dir)
     doc = build_prediction_doc(prediction_input, predictions)
-    doc["id"] = save_prediction(run_id, doc, unstructured_path)
+    doc["id"] = save_prediction(run_id, doc)
     summary = ", ".join(
         f"{name} {p['probabilidad']:.2f}" for name, p in predictions.items()
     )
     log.info(
-        "Predicción guardada (id %d): %s con %.1f °C -> %s",
+        "Predicción guardada (id %s): %s con %.1f °C -> %s",
         doc["id"],
         doc["fecha"],
         prediction_input.temperature,
@@ -253,21 +242,18 @@ def predict_next_month(
     run_id: str,
     temperature: float,
     db_path: Path | None = None,
-    unstructured_path: Path | None = None,
     models_dir: Path | None = None,
 ) -> dict[str, object]:
     """Predice el mes siguiente al último dato con los modelos de una corrida.
 
     Completa los rezagos desde ``datos_limpios``, predice con los modelos del
-    escenario A y guarda el resultado en ``unstructured.db``. Los eventos
+    escenario A y guarda el resultado en la colección ``predicciones`` de MongoDB. Los eventos
     quedan atados al ``run_id`` en ``logs``.
 
     Args:
         run_id: corrida entrenada cuyos modelos se usan.
         temperature: temperatura media esperada del mes (°C).
         db_path: ruta de ``structured.db``; por defecto la de ``config``.
-        unstructured_path: ruta de ``unstructured.db``; por defecto la de
-            ``config``.
         models_dir: carpeta de modelos; por defecto ``config.MODELS_DIR``.
 
     Returns:
@@ -278,14 +264,12 @@ def predict_next_month(
             A, la temperatura es inválida o falta historial.
     """
     db.init_structured_db(db_path)
-    if db.get_run(run_id, db_path) is None:
+    if runs.get_run(run_id) is None:
         raise ValueError(f"No existe la corrida {run_id}")
-    logger.setup_logging(db_path)
+    logger.setup_logging()
     token = logger.current_run_id.set(run_id)
     try:
-        return _predict_and_save(
-            run_id, temperature, db_path, unstructured_path, models_dir
-        )
+        return _predict_and_save(run_id, temperature, db_path, models_dir)
     finally:
         logger.current_run_id.reset(token)
-        db.checkpoint_all(db_path, unstructured_path)
+        logger.flush_logs()

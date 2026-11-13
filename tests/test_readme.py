@@ -8,6 +8,7 @@ opciones de la línea de comandos, las páginas de la interfaz, los paquetes de
 import re
 from pathlib import Path
 
+import mongomock
 import pytest
 
 from app_pages.sidebar import PAGE_NAMES
@@ -122,29 +123,36 @@ def test_generated_files_are_ignored_by_git(pattern: str) -> None:
     assert pattern in ignored
 
 
-def test_the_sql_examples_run_on_empty_databases(tmp_path: Path) -> None:
-    """Las consultas SQL del README son válidas sobre las bases recién creadas."""
-    import sqlite3
+def test_the_mongodb_examples_run_on_empty_collections(
+    mongo_db: mongomock.Database,
+) -> None:
+    """Las consultas de MongoDB del README se ejecutan sobre colecciones vacías."""
+    code = "\n".join(code_blocks("python")).replace("<RUN_ID>", "x")
+    assert "find(" in code and "aggregate(" in code
+    exec(compile(code, "README.md", "exec"), {})  # noqa: S102 - código del propio README
 
-    from src import db
 
-    structured, unstructured = tmp_path / "s.db", tmp_path / "u.db"
-    db.init_databases(structured, unstructured)
-    sql = "\n".join(code_blocks("sql"))
-    assert "json_extract" in sql and "ATTACH" in sql
-    only_unstructured = sqlite3.connect(unstructured)
-    both = sqlite3.connect(structured)
-    both.execute(f"ATTACH DATABASE '{unstructured}' AS unstructured")
-    try:
-        for statement in sql.split(";"):
-            body = "\n".join(
-                line for line in statement.splitlines() if not line.startswith("--")
-            ).strip()
-            if not body or body.startswith("ATTACH"):
-                continue
-            body = body.replace("<RUN_ID>", "x")
-            conn = only_unstructured if "FROM resultados_modelos" in body else both
-            conn.execute(body).fetchall()
-    finally:
-        only_unstructured.close()
-        both.close()
+def test_env_variables_in_the_readme_match_the_code_and_the_template() -> None:
+    """Las variables del ``.env`` que documenta el README existen en el código y en la plantilla."""
+    from src import mongo
+
+    template = (config.ROOT_DIR / ".env.example").read_text(encoding="utf-8")
+    for name in (mongo.ENV_URI, mongo.ENV_PASSWORD, mongo.ENV_DB_NAME):
+        assert f"`{name}`" in README, name
+        assert re.search(rf"^{name}=", template, flags=re.MULTILINE), name
+    assert "cp .env.example .env" in README
+
+
+def test_error_messages_in_the_readme_are_real(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Los mensajes de error que el README explica son los que de verdad aparecen."""
+    from src import mongo
+
+    monkeypatch.setattr(config, "ENV_PATH", tmp_path / ".env")
+    with pytest.raises(mongo.MongoConfigError) as error:
+        mongo.load_settings(environ={})
+    assert "Falta la variable URI de MongoDB" in str(error.value)
+    assert "Falta la variable URI de MongoDB" in README
+    assert "ServerSelectionTimeoutError" in README and "authentication failed" in README
+    assert "Network Access" in README and "Database Access" in README

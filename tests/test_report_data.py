@@ -10,7 +10,13 @@ import sys
 from pathlib import Path
 
 import pytest
-from support import isolated_logging, tiny_grids
+from support import (
+    FRESH_MONGO_PRELUDE,
+    dump_mongo,
+    isolated_logging,
+    isolated_mongo,
+    tiny_grids,
+)
 
 from src import (
     config,
@@ -24,6 +30,7 @@ from src import (
     report_charts,
     report_data,
     results,
+    runs,
 )
 
 LR = ("logistic_regression",)
@@ -35,27 +42,25 @@ def report_run(tmp_path_factory: pytest.TempPathFactory) -> dict:
     base = tmp_path_factory.mktemp("report")
     paths = {
         "db_path": base / "structured.db",
-        "unstructured_path": base / "unstructured.db",
         "models_dir": base / "models",
     }
-    with isolated_logging(), tiny_grids():
+    with isolated_logging(), isolated_mongo() as client, tiny_grids():
         run_id = pipeline.run_etl(db_path=paths["db_path"], seed=7)
         pipeline.run_training(
             run_id,
             db_path=paths["db_path"],
-            unstructured_path=paths["unstructured_path"],
             models_dir=paths["models_dir"],
             model_names=LR,
         )
         predict.predict_next_month(run_id, 12.0, **paths)
         predict.predict_next_month(run_id, 20.0, **paths)
         etl_only = pipeline.run_etl(db_path=paths["db_path"])
-    return {"run_id": run_id, "etl_only": etl_only, **paths}
+    return {"run_id": run_id, "etl_only": etl_only, "mongo": client, **paths}
 
 
 def collect(run: dict, **kwargs) -> report_data.ReportData:
     """Reúne los datos del reporte de la corrida de prueba."""
-    paths = {k: run[k] for k in ("db_path", "unstructured_path", "models_dir")}
+    paths = {k: run[k] for k in ("db_path", "models_dir")}
     return report_data.collect_report_data(run["run_id"], **paths, **kwargs)
 
 
@@ -107,8 +112,9 @@ def test_predictions_are_included_in_order_or_left_out(report_run: dict) -> None
     """Las predicciones se incluyen, de la más vieja a la más nueva, o se omiten."""
     with_predictions = collect(report_run)
     assert [p["temperatura"] for p in with_predictions.predictions] == [12.0, 20.0]
-    ids = [p["id"] for p in with_predictions.predictions]
-    assert ids == sorted(ids)
+    created = [p["created_at"] for p in with_predictions.predictions]
+    assert created == sorted(created)
+    assert len({p["id"] for p in with_predictions.predictions}) == 2  # ids distintos
     first = with_predictions.predictions[0]
     assert first["fecha"] == "2026-09-01" and "created_at" in first
     assert "logistic_regression" in first["modelos"]
@@ -129,9 +135,7 @@ def test_traceability_notes() -> None:
 def test_dirty_run_note_reaches_the_report_data(report_run: dict) -> None:
     """Una corrida hecha con cambios sin commitear lo deja anotado en el reporte."""
     data = collect(report_run)
-    config_doc = results.load_run_config(
-        report_run["run_id"], report_run["unstructured_path"]
-    )
+    config_doc = results.load_run_config(report_run["run_id"])
     assert (config_doc["git_dirty"] is True) == any(
         "sin commitear" in n for n in data.notes
     )
@@ -147,11 +151,10 @@ def test_unknown_untrained_or_missing_etl_runs_are_rejected(
         collect(report_run | {"run_id": report_run["etl_only"]})
     empty = {
         "db_path": tmp_path / "s.db",
-        "unstructured_path": tmp_path / "u.db",
         "models_dir": tmp_path / "m",
     }
     db.init_structured_db(empty["db_path"])
-    run_id = db.create_run(db_path=empty["db_path"])
+    run_id = runs.create_run()
     with pytest.raises(ValueError, match="primero entrenala"):
         collect(empty | {"run_id": run_id})
 
@@ -176,32 +179,34 @@ def test_unreadable_model_is_reported_as_a_note_not_a_crash(
 
 
 def test_collecting_adds_no_events_to_logs(report_run: dict) -> None:
-    """Armar los datos del reporte no escribe en la tabla logs."""
+    """Armar los datos del reporte no escribe en la colección logs."""
     root = logging.getLogger(logger.ROOT_LOGGER_NAME)
     saved_level, saved_handlers = root.level, list(root.handlers)
     try:
-        logger.setup_logging(report_run["db_path"])
-        before = len(queries.get_logs(db_path=report_run["db_path"]))
+        logger.setup_logging()
+        before = len(queries.get_logs())
         collect(report_run)
-        assert len(queries.get_logs(db_path=report_run["db_path"])) == before
+        logger.flush_logs()  # si hubiera algo pendiente, saldría acá
+        assert len(queries.get_logs()) == before
     finally:
         root.setLevel(saved_level)
         root.handlers[:] = saved_handlers
 
 
 def test_data_comes_only_from_the_databases_even_in_a_fresh_process(
-    report_run: dict,
+    report_run: dict, tmp_path: Path
 ) -> None:
     """Un proceso nuevo, sin memoria, arma los mismos datos solo desde el disco."""
-    code = (
-        "import sys, json; from pathlib import Path; from src import report_data as r;"
+    code = FRESH_MONGO_PRELUDE + (
+        "import json; from src import report_data as r;"
         "a = sys.argv; d = r.collect_report_data(a[1], db_path=Path(a[2]),"
-        " unstructured_path=Path(a[3]), models_dir=Path(a[4]));"
+        " models_dir=Path(a[3]));"
         "print(json.dumps({'seed': d.config['seed'], 'sha': d.config['dataset_sha256'],"
         " 'rows': d.overview['rows'], 'n_pred': len(d.predictions),"
         " 'cat': {k: c.verdict.category for k, c in d.conclusions.items()},"
         " 'head': d.conclusions['A'].explanation.headline}))"
     )
+    dump = dump_mongo(report_run["mongo"], tmp_path / "mongo.json")
     done = subprocess.run(
         [
             sys.executable,
@@ -209,8 +214,8 @@ def test_data_comes_only_from_the_databases_even_in_a_fresh_process(
             code,
             report_run["run_id"],
             str(report_run["db_path"]),
-            str(report_run["unstructured_path"]),
             str(report_run["models_dir"]),
+            str(dump),
         ],
         cwd=config.ROOT_DIR,
         capture_output=True,
@@ -232,7 +237,6 @@ def test_multi_model_run_uses_the_same_rule(trained_run: dict) -> None:
     data = report_data.collect_report_data(
         trained_run["run_id"],
         db_path=trained_run["db_path"],
-        unstructured_path=trained_run["unstructured_path"],
         models_dir=trained_run["models_dir"],
     )
     for scenario, conclusion in data.conclusions.items():
@@ -251,7 +255,7 @@ def test_a_pdf_can_be_built_with_a_single_model_per_scenario(report_run: dict) -
     Con una sola columna, el gráfico de matrices de confusión queda más alto que la
     página y ReportLab lanzaba LayoutError.
     """
-    paths = {k: report_run[k] for k in ("db_path", "unstructured_path", "models_dir")}
+    paths = {k: report_run[k] for k in ("db_path", "models_dir")}
     pdf = report.generate_report(report_run["run_id"], True, **paths)
     assert pdf.startswith(b"%PDF-") and pdf.rstrip().endswith(b"%%EOF")
     assert len(re.findall(rb"/Type /Page\b", pdf)) >= 4
@@ -277,15 +281,9 @@ def test_report_needs_the_clean_data_too(report_run: dict, tmp_path: Path) -> No
     """Con resultados guardados pero sin datos limpios (ETL borrado), lo dice."""
     empty_structured = tmp_path / "structured.db"
     db.init_structured_db(empty_structured)
-    with db.get_connection(empty_structured) as conn:
-        conn.execute(
-            "INSERT INTO runs (run_id, started_at, status, seed) VALUES (?, 'ahora', 'ok', 7)",
-            (report_run["run_id"],),
-        )
     with pytest.raises(ValueError, match="ejecutá el ETL"):
         report_data.collect_report_data(
             report_run["run_id"],
             db_path=empty_structured,
-            unstructured_path=report_run["unstructured_path"],
             models_dir=report_run["models_dir"],
         )

@@ -9,7 +9,7 @@ from streamlit.testing.v1 import AppTest
 from support import open_page as open_page_in
 from support import start_app
 
-from src import data, db, pipeline, predict, queries
+from src import data, logger, pipeline, predict, queries, runs
 
 open_page = partial(open_page_in, "Predicción")
 
@@ -157,14 +157,15 @@ def test_viewing_the_page_adds_no_events_to_logs(use_trained: dict) -> None:
     """Mirar la página no escribe en logs; solo el clic en Predecir lo hace."""
 
     def count() -> int:
-        return len(queries.get_logs(db_path=use_trained["db_path"]))
+        logger.flush_logs()  # que un evento pendiente no se vea como "no hay eventos"
+        return len(queries.get_logs())
 
     before = count()
     at = open_page()
     assert count() == before
     predict_click(at)
     assert count() > before
-    assert queries.get_logs(db_path=use_trained["db_path"])["run_id"].isna().sum() == 0
+    assert queries.get_logs()["run_id"].isna().sum() == 0
 
 
 def test_page_does_not_break_other_pages_without_data(tmp_config: Path) -> None:
@@ -173,7 +174,7 @@ def test_page_does_not_break_other_pages_without_data(tmp_config: Path) -> None:
     for page in ("Predicción", "Reporte", "Datos"):
         at.sidebar.radio[0].set_value(page).run()
         assert not at.exception, page
-    assert db.get_run("noexiste") is None
+    assert runs.get_run("noexiste") is None
 
 
 def test_sidebar_marks_the_prediction_step_as_done(use_trained: dict) -> None:

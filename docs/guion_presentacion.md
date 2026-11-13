@@ -1,6 +1,6 @@
 # Guion de ensayo: presentación de 8 a 10 minutos
 
-Acompaña a `docs/presentacion.pptx` (8 diapositivas). Las mismas ideas están en las notas del orador de cada diapositiva. Los números salen de la corrida `7c40e515` (semilla 42, grilla completa).
+Acompaña a `docs/presentacion.pptx` (8 diapositivas). Las mismas ideas están en las notas del orador de cada diapositiva. Los números salen de la corrida `6cc7dbd4` (semilla 42, grilla completa), guardada en MongoDB.
 
 ## Tiempos
 
@@ -15,14 +15,15 @@ Acompaña a `docs/presentacion.pptx` (8 diapositivas). Las mismas ideas están e
 | 7 | Predicción y trazabilidad (con demo) | 2:00 | 8:15 |
 | 8 | Qué se puede afirmar y qué no | 0:45 | 9:00 |
 
-Total: 9 minutos, con 1 de margen. Si te pasás, recortá la demo (diapositiva 7) a la consulta SQL.
+Total: 9 minutos, con 1 de margen. Si te pasás, recortá la demo (diapositiva 7) a la consulta de MongoDB.
 
 ## Antes de empezar (2 minutos)
 
-- Tené la app abierta en otra pestaña: `streamlit run app.py`, con la corrida `7c40e515` elegida en la barra lateral.
-- Abrí una terminal en la carpeta del proyecto con `sqlite3 db/structured.db` lista para la consulta de `logs`.
+- Verificá que tenés **internet** y que el `.env` está completo: sin eso, la app no arranca (te lo dice con un mensaje claro).
+- Tené la app abierta en otra pestaña: `streamlit run app.py`, con la corrida `6cc7dbd4` elegida en la barra lateral.
+- Abrí en otra pestaña Atlas (*Browse Collections ▸ demanda_electrica ▸ logs ▸ Aggregation*) o MongoDB Compass, con la consulta lista para pegar (está más abajo).
 - Verificá que la página **Predicción** carga sin errores: es la demo.
-- Si falla la app, la diapositiva 7 ya muestra la consulta y su resultado. Seguí con eso.
+- Si falla la app o la conexión, la diapositiva 7 ya muestra la consulta y su resultado. Seguí con eso.
 
 ## Guion
 
@@ -30,7 +31,7 @@ Total: 9 minutos, con 1 de margen. Si te pasás, recortá la demo (diapositiva 7
 «Somos MatIAndo y presento un trabajo individual para Programación Avanzada en Ciencia de Datos. La pregunta: dado un mes, ¿su demanda eléctrica va a ser alta *para su época del año*? Les adelanto algo: el método quedó sólido, pero con tan pocos datos el resultado es modesto, y lo voy a mostrar tal cual.»
 
 **2. El problema (1:00).**
-«Es un clasificador binario a nivel mensual, no diario ni horario. El flujo completo: un CSV público, un ETL que deja los datos limpios y los eventos en una base, el cálculo de variables y target, tres modelos, y los resultados en una segunda base, con la interfaz de Streamlit y un reporte PDF. Todo el código está en `src/` y corre igual desde la interfaz o con `python -m src.pipeline`.»
+«Es un clasificador binario a nivel mensual, no diario ni horario. El flujo completo: un CSV público, un ETL que deja los datasets limpios en SQLite, el cálculo de variables y target, tres modelos, y todo lo que registra cada corrida —logs, resultados y predicciones— en MongoDB, con la interfaz de Streamlit y un reporte PDF. Todo el código está en `src/` y corre igual desde la interfaz o con `python -m src.pipeline`.»
 
 **3. Los datos (1:00).**
 «308 meses nacionales, de 2001 a 2026. Guardo todos porque el target y los rezagos necesitan la demanda de 2001–2004 como historia, pero el target existe desde 2007: 236 meses, de los cuales 60 son de demanda alta, el 25 %. Dos supuestos que declaro: la fuente son datos públicos del gobierno argentino, pero no registré el portal exacto; y la temperatura es de Buenos Aires/AMBA, una zona que *inferí* comparando con normales climáticas, no la confirma la fuente.»
@@ -46,25 +47,28 @@ Total: 9 minutos, con 1 de margen. Si te pasás, recortá la demo (diapositiva 7
 
 **7. Predicción y trazabilidad (2:00).**
 «*(Cambiar a la app.)* En Predicción tomo el mes siguiente al último dato, ingreso la temperatura esperada y el sistema completa los rezagos desde la base. *(Mover la temperatura y pulsar Predecir.)* Devuelve la probabilidad de "alta" de cada modelo y la guarda, así que sobrevive al reinicio. Aclaro que no está calibrada: no es "90 % de chances", sirve para comparar.
-*(Cambiar a la terminal o a la diapositiva.)* Cada paso del pipeline queda en la tabla `logs`, atado al `run_id`. Esta consulta cuenta los eventos de una corrida por módulo y nivel. Y como el mismo `run_id` está en la otra base, se cruzan con `ATTACH`.»
+*(Cambiar a Atlas o a la diapositiva.)* Cada paso del pipeline queda en la colección `logs` de MongoDB, atado al `run_id`, con su nombre, el tipo de evento y la duración. Esta consulta lista los cuatro pasos más lentos de la corrida. Esos eventos están en MongoDB, y el mismo `run_id` une los logs con los resultados y las predicciones de la corrida.»
 
 **8. Qué se puede afirmar y qué no (0:45).**
-«Lo que sí: el método no usa datos futuros, los resultados se reproducen —en un clon limpio dieron idénticos— y hay 428 tests con cobertura total. Lo que no: no puedo afirmar que haya señal clara al anticipar, ni que un modelo sea mejor que otro, ni que las probabilidades estén calibradas. El valor del trabajo está en el método y la trazabilidad. Para seguir: más historia y temperatura diaria.»
+«Lo que sí: el método no usa datos futuros, los resultados se reproducen —en un clon limpio dieron idénticos y también al pasar a MongoDB— y hay 493 tests con cobertura total. Lo que no: no puedo afirmar que haya señal clara al anticipar, ni que un modelo sea mejor que otro, ni que las probabilidades estén calibradas. El valor del trabajo está en el método y la trazabilidad. Para seguir: más historia y temperatura diaria.»
 
 ## Demo paso a paso (diapositiva 7)
 
-1. En la barra lateral, confirmá la corrida `7c40e515`.
+1. En la barra lateral, confirmá la corrida `6cc7dbd4`.
 2. Entrá a **Predicción**: se ve el mes fijo y la temperatura por defecto.
 3. Cambiá la temperatura (por ejemplo, 21,5) y pulsá **Predecir**.
 4. Mostrá el mensaje «Predicción guardada», la tabla por modelo y la advertencia de calibración.
-5. En la terminal:
-   ```sql
-   SELECT module, level, COUNT(*) AS eventos
-   FROM logs WHERE run_id = '7c40e515'
-   GROUP BY module, level
-   ORDER BY eventos DESC;
+5. En Atlas (pestaña *Aggregation* de la colección `logs`) o en Compass, pegá este pipeline:
+   ```js
+   [
+     { $match: { run_id: "6cc7dbd4", event: "fin" } },
+     { $group: { _id: "$step", ms: { $max: "$duration_ms" } } },
+     { $sort: { ms: -1 } },
+     { $limit: 4 }
+   ]
    ```
-   Resultado al día de hoy (8 filas): `src.train INFO 104`, `src.results INFO 23`, `src.features INFO 21`, `src.data INFO 12`, `src.pipeline INFO 9`, `src.predict INFO 3`, `src.report INFO 3` y `src.data WARNING 2` (los dos valores de potencia máxima repetidos). Cada predicción o reporte nuevo que hagas sobre esa corrida suma eventos, así que `src.predict` y `src.report` pueden cambiar de cantidad.
+   Resultado esperado (corrida `6cc7dbd4`): `run_training_steps` 19298 ms, `train_all` 19277 ms, `train_model` 8496 ms y `search_hyperparameters` 8436 ms. Los pasos se anidan (el entrenamiento contiene a sus pasos internos), por eso los tiempos se superponen. Si repetís la consulta sobre otra corrida, los valores serán otros. Cada predicción o reporte nuevo sobre esa corrida suma eventos, pero no cambia estos cuatro pasos.
+6. Alternativa desde Python, sin Atlas: `from src import mongo`, y la consulta equivalente con `mongo.get_database()["logs"].aggregate([...])` (hay ejemplos en el README).
 
 ## Preguntas probables
 
@@ -76,4 +80,6 @@ Total: 9 minutos, con 1 de margen. Si te pasás, recortá la demo (diapositiva 7
 - **¿Hay fuga de información?** El target y los rezagos usan solo el pasado (hay un test), y imputación y escalado se ajustan dentro del Pipeline solo con entrenamiento.
 - **¿De dónde salen los datos?** De fuentes públicas del gobierno de Argentina; el portal exacto y la fecha no quedaron registrados.
 - **¿Se puede reproducir?** Cada corrida guarda semilla, hash del dataset, versiones y commit. En un clon limpio, las métricas salieron idénticas.
-- **¿Por qué dos bases?** Los datos con columnas fijas van en una base relacional y los resultados, con estructura distinta por modelo, como JSON en otra; el `run_id` las une.
+- **¿Por qué SQLite y MongoDB?** Los datasets, con columnas fijas, van a SQLite. Los logs, las corridas y los resultados son documentos con forma variable (cada modelo con sus parámetros, cada evento con o sin paso) y van a MongoDB. El `run_id` los une.
+- **¿Qué pasa si no hay internet o falla MongoDB?** La app y el pipeline no arrancan y lo dicen con un mensaje claro, sin mostrar la clave. Es una dependencia que asumo y declaro en los límites.
+- **¿Por qué los logs se mandan por lote?** Cada operación contra Atlas cuesta unos 30 ms; mandar los eventos de a uno sumaría varios segundos por corrida. Los errores salen al instante y, si el proceso muere de golpe, se pueden perder los eventos del paso en curso: es un compromiso que acepté.

@@ -4,12 +4,11 @@ La app consulta siempre estas funciones y no guarda nada en la memoria de
 Streamlit, así los resultados siguen ahí al cerrar y reabrir la app.
 """
 
-import json
 from pathlib import Path
 
 import pandas as pd
 
-from src import config, data, db, features, logger, models, results
+from src import config, data, db, features, logger, models, mongo, results, runs
 
 STEP_ETL = "ETL"
 STEP_TRAINING = "Entrenamiento"
@@ -18,35 +17,30 @@ STEP_REPORT = "Reporte"
 STEPS = (STEP_ETL, STEP_TRAINING, STEP_PREDICTION, STEP_REPORT)
 
 RUN_COLUMNS = ["run_id", "started_at", "finished_at", "status", "seed", "notes"]
-LOG_COLUMNS = ["id", "ts", "level", "module", "message", "run_id"]
+LOG_COLUMNS = [
+    "ts",
+    "level",
+    "module",
+    "message",
+    "run_id",
+    "step",
+    "event",
+    "duration_ms",
+]
 
 
-def _read(
-    query: str, params: tuple, path: Path | None, columns: list[str]
-) -> pd.DataFrame:
-    """Ejecuta una consulta sobre ``structured.db`` y devuelve un DataFrame."""
-    db.init_structured_db(path)
-    with db.get_connection(path) as conn:
-        rows = conn.execute(query, params).fetchall()
-    return pd.DataFrame([tuple(r) for r in rows], columns=columns)
-
-
-def list_runs(db_path: Path | None = None) -> pd.DataFrame:
-    """Lista las corridas, la más reciente primero.
-
-    Args:
-        db_path: ruta de ``structured.db``; por defecto la de ``config``.
+def list_runs() -> pd.DataFrame:
+    """Lista las corridas de MongoDB, la más reciente primero.
 
     Returns:
         DataFrame con ``RUN_COLUMNS``; vacío si no hay corridas.
     """
-    return _read(
-        f"SELECT {', '.join(RUN_COLUMNS)} FROM runs "
-        "ORDER BY started_at DESC, rowid DESC",
-        (),
-        db_path,
-        RUN_COLUMNS,
+    cursor = (
+        mongo.get_database()[mongo.RUNS]
+        .find({}, {"_id": 0})
+        .sort([("started_at", -1), ("_id", -1)])
     )
+    return pd.DataFrame(list(cursor), columns=RUN_COLUMNS)
 
 
 def report_path(run_id: str, reports_dir: Path | None = None) -> Path:
@@ -62,99 +56,84 @@ def has_report(run_id: str, reports_dir: Path | None = None) -> bool:
 
 def run_steps(
     run_id: str,
-    db_path: Path | None = None,
-    unstructured_path: Path | None = None,
     reports_dir: Path | None = None,
 ) -> dict[str, bool]:
     """Indica qué pasos de una corrida están hechos.
 
-    El ETL se deduce de sus eventos en ``logs``, el entrenamiento de los
-    resultados guardados, la predicción de la colección ``predicciones`` y el
-    reporte de la existencia del PDF en ``reports/``.
+    El ETL se deduce de sus eventos en la colección ``logs`` de MongoDB, el
+    entrenamiento de los resultados guardados, la predicción de la colección
+    ``predicciones`` y el reporte de la existencia del PDF en ``reports/``.
 
     Args:
         run_id: identificador de la corrida.
-        db_path: ruta de ``structured.db``; por defecto la de ``config``.
-        unstructured_path: ruta de ``unstructured.db``; por defecto la de
-            ``config``.
         reports_dir: carpeta de los PDF; por defecto ``config.REPORTS_DIR``.
 
     Returns:
         Diccionario paso a ``True`` (hecho) o ``False`` (pendiente).
     """
-    etl = _read(
-        "SELECT 1 FROM logs WHERE run_id = ? AND message LIKE ? LIMIT 1",
-        (run_id, "Tabla datos_limpios guardada%"),
-        db_path,
-        ["x"],
+    etl = mongo.get_database()[mongo.LOGS].find_one(
+        {"run_id": run_id, "message": {"$regex": "^Tabla datos_limpios guardada"}},
+        {"_id": 1},
     )
     return {
-        STEP_ETL: not etl.empty,
-        STEP_TRAINING: results.has_results(run_id, unstructured_path),
-        STEP_PREDICTION: has_predictions(run_id, unstructured_path),
+        STEP_ETL: etl is not None,
+        STEP_TRAINING: results.has_results(run_id),
+        STEP_PREDICTION: has_predictions(run_id),
         STEP_REPORT: has_report(run_id, reports_dir),
     }
 
 
-def has_predictions(run_id: str, unstructured_path: Path | None = None) -> bool:
+def has_predictions(run_id: str) -> bool:
     """Indica si una corrida tiene al menos una predicción guardada.
 
     Args:
         run_id: identificador de la corrida.
-        unstructured_path: ruta de ``unstructured.db``; por defecto la de
-            ``config``.
     """
-    path = unstructured_path or config.UNSTRUCTURED_DB_PATH
-    db.init_unstructured_db(path)
-    with db.get_connection(path) as conn:
-        row = conn.execute(
-            "SELECT 1 FROM predicciones WHERE run_id = ? LIMIT 1", (run_id,)
-        ).fetchone()
-    return row is not None
+    found = mongo.get_database()[mongo.PREDICTIONS].find_one(
+        {"run_id": run_id}, {"_id": 1}
+    )
+    return found is not None
 
 
-def run_summary(
-    run_id: str,
-    db_path: Path | None = None,
-    unstructured_path: Path | None = None,
-) -> dict[str, object] | None:
+def run_summary(run_id: str) -> dict[str, object] | None:
     """Resume una corrida para la barra lateral.
 
     Args:
         run_id: identificador de la corrida.
-        db_path: ruta de ``structured.db``; por defecto la de ``config``.
-        unstructured_path: ruta de ``unstructured.db``; por defecto la de
-            ``config``.
 
     Returns:
         Diccionario con los datos de ``runs``, el hash del dataset (``None``
         hasta que se entrena) y el estado de los pasos; ``None`` si la corrida
         no existe.
     """
-    db.init_structured_db(db_path)
-    run = db.get_run(run_id, db_path)
+    run = runs.get_run(run_id)
     if run is None:
         return None
-    summary = {key: run[key] for key in RUN_COLUMNS}
-    summary["dataset_sha256"] = _config_value(
-        run_id, "$.dataset_sha256", unstructured_path
+    summary = {key: run.get(key) for key in RUN_COLUMNS}
+    saved = mongo.get_database()[mongo.CONFIGURATION].find_one(
+        {"run_id": run_id}, {"dataset_sha256": 1}
     )
-    summary["steps"] = run_steps(run_id, db_path, unstructured_path)
+    summary["dataset_sha256"] = None if saved is None else saved["dataset_sha256"]
+    summary["steps"] = run_steps(run_id)
     return summary
 
 
-def _config_value(run_id: str, json_path: str, path: Path | None) -> object:
-    """Lee un valor de la configuración de una corrida con ``json_extract``."""
-    path = path if path is not None else config.UNSTRUCTURED_DB_PATH
-    db.init_unstructured_db(path)
-    with db.get_connection(path) as conn:
-        row = conn.execute(
-            "SELECT json_extract(doc, ?) FROM configuracion WHERE run_id = ?",
-            (json_path, run_id),
-        ).fetchone()
-    return None if row is None else row[0]
-
-
+# Campo del documento de cada columna de ``results_table`` (con punto = anidado).
+RESULT_FIELDS = [
+    "scenario",
+    "model",
+    "n_train",
+    "n_test",
+    "cv.mean",
+    "cv.std",
+    "holdout.accuracy",
+    "holdout.precision",
+    "holdout.recall",
+    "holdout.f1",
+    "baselines.siempre_alta.f1",
+    "baselines.aleatorio_proporcional.f1",
+    "params",
+]
 RESULT_COLUMNS = [
     "scenario",
     "model",
@@ -172,45 +151,40 @@ RESULT_COLUMNS = [
 ]
 
 
-def results_table(run_id: str, unstructured_path: Path | None = None) -> pd.DataFrame:
+def _nested(doc: dict, dotted: str) -> object:
+    """Valor de un campo anidado (``"cv.mean"``) de un documento, o ``None``."""
+    value: object = doc
+    for part in dotted.split("."):
+        if not isinstance(value, dict) or part not in value:
+            return None
+        value = value[part]
+    return value
+
+
+def results_table(run_id: str) -> pd.DataFrame:
     """Tabla modelo por escenario con las métricas guardadas de una corrida.
 
     Args:
         run_id: identificador de la corrida.
-        unstructured_path: ruta de ``unstructured.db``; por defecto la de
-            ``config``.
 
     Returns:
         DataFrame con ``RESULT_COLUMNS``, ordenado por escenario y modelo;
         vacío si la corrida no tiene resultados.
     """
-    path = unstructured_path or config.UNSTRUCTURED_DB_PATH
-    db.init_unstructured_db(path)
-    with db.get_connection(path) as conn:
-        rows = conn.execute(
-            "SELECT scenario, model, "
-            "json_extract(doc, '$.n_train'), json_extract(doc, '$.n_test'), "
-            "json_extract(doc, '$.cv.mean'), json_extract(doc, '$.cv.std'), "
-            "json_extract(doc, '$.holdout.accuracy'), "
-            "json_extract(doc, '$.holdout.precision'), "
-            "json_extract(doc, '$.holdout.recall'), "
-            "json_extract(doc, '$.holdout.f1'), "
-            "json_extract(doc, '$.baselines.siempre_alta.f1'), "
-            "json_extract(doc, '$.baselines.aleatorio_proporcional.f1'), "
-            "json_extract(doc, '$.params') "
-            "FROM resultados_modelos WHERE run_id = ?",
-            (run_id,),
-        ).fetchall()
-    table = pd.DataFrame([tuple(r) for r in rows], columns=RESULT_COLUMNS)
+    cursor = mongo.get_database()[mongo.RESULTS].find(
+        {"run_id": run_id}, {field: 1 for field in RESULT_FIELDS} | {"_id": 0}
+    )
+    rows = []
+    for doc in cursor:
+        rows.append([_nested(doc, field) for field in RESULT_FIELDS])
+    table = pd.DataFrame(rows, columns=RESULT_COLUMNS)
     order = {name: i for i, name in enumerate(models.MODEL_NAMES)}
     table["_order"] = table["model"].map(order)
     table = table.sort_values(["scenario", "_order"]).drop(columns="_order")
     return table.reset_index(drop=True)
 
 
-def result_docs(
-    run_id: str, unstructured_path: Path | None = None
-) -> list[dict[str, object]]:
+def result_docs(run_id: str) -> list[dict[str, object]]:
     """Devuelve los documentos JSON completos de los resultados de una corrida.
 
     Sirven para las matrices de confusión, las predicciones por mes y las
@@ -218,15 +192,13 @@ def result_docs(
 
     Args:
         run_id: identificador de la corrida.
-        unstructured_path: ruta de ``unstructured.db``; por defecto la de
-            ``config``.
 
     Returns:
         Lista de documentos, ordenados por escenario y modelo.
     """
-    table = results_table(run_id, unstructured_path)
+    table = results_table(run_id)
     return [
-        results.load_result(run_id, row.scenario, row.model, unstructured_path)
+        results.load_result(run_id, row.scenario, row.model)
         for row in table.itertuples()
     ]
 
@@ -235,47 +207,40 @@ def get_logs(
     run_id: str | None = None,
     levels: list[str] | None = None,
     modules: list[str] | None = None,
-    db_path: Path | None = None,
 ) -> pd.DataFrame:
-    """Devuelve eventos de ``logs`` con filtros opcionales.
+    """Devuelve eventos de la colección ``logs`` de MongoDB, con filtros.
 
     Args:
         run_id: si se indica, solo los eventos de esa corrida.
         levels: niveles a incluir (``INFO``, ``WARNING``, ``ERROR``...).
         modules: módulos a incluir (por ejemplo ``src.train``).
-        db_path: ruta de ``structured.db``; por defecto la de ``config``.
 
     Returns:
-        DataFrame con ``LOG_COLUMNS``, en orden cronológico.
+        DataFrame con ``LOG_COLUMNS``, en orden cronológico. ``step``, ``event``
+        y ``duration_ms`` son nulos en los eventos que no los tienen.
     """
-    conditions, params = [], []
+    query: dict[str, object] = {}
     if run_id is not None:
-        conditions.append("run_id = ?")
-        params.append(run_id)
-    for column, values in (("level", levels), ("module", modules)):
+        query["run_id"] = run_id
+    for field, values in (("level", levels), ("module", modules)):
         if values:
-            conditions.append(f"{column} IN ({', '.join('?' * len(values))})")
-            params.extend(values)
-    where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
-    return _read(
-        f"SELECT {', '.join(LOG_COLUMNS)} FROM logs {where} ORDER BY id",
-        tuple(params),
-        db_path,
-        LOG_COLUMNS,
+            query[field] = {"$in": list(values)}
+    cursor = (
+        mongo.get_database()[mongo.LOGS]
+        .find(query, {"_id": 0})
+        .sort([("ts", 1), ("_id", 1)])
     )
+    return pd.DataFrame(list(cursor), columns=LOG_COLUMNS)
 
 
-def list_log_modules(
-    run_id: str | None = None, db_path: Path | None = None
-) -> list[str]:
+def list_log_modules(run_id: str | None = None) -> list[str]:
     """Lista los módulos que registraron eventos, para el filtro de la página.
 
     Args:
         run_id: si se indica, solo los de esa corrida.
-        db_path: ruta de ``structured.db``; por defecto la de ``config``.
     """
-    logs = get_logs(run_id, db_path=db_path)
-    return sorted(logs["module"].unique().tolist())
+    query = {} if run_id is None else {"run_id": run_id}
+    return sorted(mongo.get_database()[mongo.LOGS].distinct("module", query))
 
 
 def data_overview(db_path: Path | None = None) -> dict[str, object] | None:
@@ -354,7 +319,6 @@ def feature_importance_for(
     run_id: str,
     scenario: str,
     model: str,
-    unstructured_path: Path | None = None,
     models_dir: Path | None = None,
 ) -> pd.DataFrame:
     """Importancia de variables de un modelo guardado (verifica su hash).
@@ -363,14 +327,12 @@ def feature_importance_for(
         run_id: identificador de la corrida.
         scenario: ``"A"`` o ``"B"``.
         model: nombre del modelo.
-        unstructured_path: ruta de ``unstructured.db``; por defecto la de
-            ``config``.
         models_dir: carpeta de modelos; por defecto ``config.MODELS_DIR``.
 
     Returns:
         Salida de ``results.feature_importance``.
     """
-    doc = results.load_result(run_id, scenario, model, unstructured_path)
+    doc = results.load_result(run_id, scenario, model)
     estimator = results.load_model(doc, models_dir)
     return results.feature_importance(estimator, doc["features"])
 
@@ -434,80 +396,58 @@ def noise_summary(
 PREDICTION_COLUMNS = ["id", "run_id", "created_at", "fecha", "temperatura"]
 
 
-def prediction_history(
-    run_id: str | None = None, unstructured_path: Path | None = None
-) -> pd.DataFrame:
+def prediction_history(run_id: str | None = None) -> pd.DataFrame:
     """Lista las predicciones guardadas, la más reciente primero.
 
     Args:
         run_id: si se indica, solo las de esa corrida.
-        unstructured_path: ruta de ``unstructured.db``; por defecto la de
-            ``config``.
 
     Returns:
         DataFrame con ``PREDICTION_COLUMNS`` y, por cada modelo, las columnas
         ``p_<modelo>`` (probabilidad de demanda alta) y ``clase_<modelo>``.
     """
-    path = unstructured_path or config.UNSTRUCTURED_DB_PATH
-    db.init_unstructured_db(path)
-    per_model = [
-        f"json_extract(doc, '$.modelos.{name}.probabilidad'), "
-        f"json_extract(doc, '$.modelos.{name}.clase')"
-        for name in models.MODEL_NAMES
-    ]
     columns = PREDICTION_COLUMNS + [
         column
         for name in models.MODEL_NAMES
         for column in (f"p_{name}", f"clase_{name}")
     ]
-    where, params = ("WHERE run_id = ?", (run_id,)) if run_id else ("", ())
-    with db.get_connection(path) as conn:
-        rows = conn.execute(
-            "SELECT id, run_id, created_at, json_extract(doc, '$.fecha'), "
-            f"json_extract(doc, '$.temperatura'), {', '.join(per_model)} "
-            f"FROM predicciones {where} ORDER BY id DESC",
-            params,
-        ).fetchall()
-    return pd.DataFrame([tuple(r) for r in rows], columns=columns)
+    rows = []
+    for doc in _predictions(run_id, newest_first=True):
+        row = [doc.get(column) for column in PREDICTION_COLUMNS]
+        for name in models.MODEL_NAMES:
+            entry = doc.get("modelos", {}).get(name, {})
+            row += [entry.get("probabilidad"), entry.get("clase")]
+        rows.append(row)
+    return pd.DataFrame(rows, columns=columns)
 
 
-def latest_prediction(
-    run_id: str, unstructured_path: Path | None = None
-) -> dict[str, object] | None:
+def _predictions(run_id: str | None, newest_first: bool) -> list[dict]:
+    """Documentos de ``predicciones`` (de una corrida o de todas), ordenados."""
+    direction = -1 if newest_first else 1
+    cursor = (
+        mongo.get_database()[mongo.PREDICTIONS]
+        .find({} if run_id is None else {"run_id": run_id})
+        .sort([("created_at", direction), ("_id", direction)])
+    )
+    return list(cursor)
+
+
+def latest_prediction(run_id: str) -> dict[str, object] | None:
     """Devuelve el documento de la última predicción de una corrida, o ``None``."""
-    path = unstructured_path or config.UNSTRUCTURED_DB_PATH
-    db.init_unstructured_db(path)
-    with db.get_connection(path) as conn:
-        row = conn.execute(
-            "SELECT id, doc FROM predicciones WHERE run_id = ? ORDER BY id DESC LIMIT 1",
-            (run_id,),
-        ).fetchone()
-    if row is None:
-        return None
-    return {**json.loads(row["doc"]), "id": row["id"]}
+    found = _predictions(run_id, newest_first=True)[:1]
+    return results.strip_metadata(found[0]) if found else None
 
 
-def prediction_docs(
-    run_id: str, unstructured_path: Path | None = None
-) -> list[dict[str, object]]:
+def prediction_docs(run_id: str) -> list[dict[str, object]]:
     """Devuelve los documentos de todas las predicciones de una corrida.
 
     Args:
         run_id: identificador de la corrida.
-        unstructured_path: ruta de ``unstructured.db``; por defecto la de
-            ``config``.
 
     Returns:
         Documentos con su ``id`` y ``created_at``, del más viejo al más nuevo.
     """
-    path = unstructured_path or config.UNSTRUCTURED_DB_PATH
-    db.init_unstructured_db(path)
-    with db.get_connection(path) as conn:
-        rows = conn.execute(
-            "SELECT id, created_at, doc FROM predicciones WHERE run_id = ? ORDER BY id",
-            (run_id,),
-        ).fetchall()
     return [
-        {**json.loads(row["doc"]), "id": row["id"], "created_at": row["created_at"]}
-        for row in rows
+        {**results.strip_metadata(doc), "created_at": doc["created_at"]}
+        for doc in _predictions(run_id, newest_first=False)
     ]
