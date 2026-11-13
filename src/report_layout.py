@@ -184,9 +184,29 @@ def png_aspect(png: bytes) -> float:
     return height / width
 
 
-def scaled_image(png: bytes, width: float) -> Image:
-    """Imagen PNG escalada a un ancho, conservando su proporción."""
-    return Image(io.BytesIO(png), width=width, height=width * png_aspect(png))
+# Alto máximo de una imagen: el marco útil de la página mide 25,7 cm y hay que dejar
+# lugar al título que la acompaña. Una imagen más alta haría fallar a ReportLab.
+MAX_IMAGE_HEIGHT = 20 * cm
+
+
+def scaled_image(
+    png: bytes, width: float, max_height: float = MAX_IMAGE_HEIGHT
+) -> Image:
+    """Imagen PNG escalada a un ancho, sin pasar de un alto máximo.
+
+    Conserva siempre la proporción: si al ancho pedido la imagen quedaría más alta
+    que ``max_height``, se achica hasta que entre.
+
+    Args:
+        png: bytes del PNG.
+        width: ancho deseado.
+        max_height: alto máximo; por defecto ``MAX_IMAGE_HEIGHT``.
+    """
+    aspect = png_aspect(png)
+    height = width * aspect
+    if height > max_height:
+        width, height = max_height / aspect, max_height
+    return Image(io.BytesIO(png), width=width, height=height)
 
 
 def _cells(rows: list[list[object]], styles: Styles, header: bool) -> list:

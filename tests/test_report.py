@@ -9,6 +9,9 @@ import sys
 from pathlib import Path
 
 import pytest
+from matplotlib.figure import Figure
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.units import cm
 from support import main_file_only
 
 from src import (
@@ -480,3 +483,38 @@ def test_a_fresh_process_generates_the_same_report(
         report_layout.pdf_text(here.conclusions["A"].explanation.headline) in child_text
     )
     assert trained_run["run_id"] in child_text
+
+
+def real_png(width: int, height: int) -> bytes:
+    """PNG real (en blanco) de exactamente ``width`` por ``height`` píxeles."""
+    figure = Figure(figsize=(width / 100, height / 100))
+    return report_charts.figure_to_png(figure, dpi=100)
+
+
+def test_scaled_image_keeps_the_size_when_it_already_fits() -> None:
+    """Una imagen que entra se escala solo al ancho pedido."""
+    image = report_layout.scaled_image(real_png(1000, 500), 16 * cm)
+    assert image.drawWidth == pytest.approx(16 * cm)
+    assert image.drawHeight == pytest.approx(8 * cm)
+
+
+def test_scaled_image_shrinks_a_tall_image_keeping_its_proportion() -> None:
+    """Una imagen demasiado alta se achica hasta el tope, sin deformarse."""
+    image = report_layout.scaled_image(real_png(1000, 1820), 16 * cm)
+    assert image.drawHeight == pytest.approx(report_layout.MAX_IMAGE_HEIGHT)
+    assert image.drawWidth < 16 * cm
+    assert image.drawHeight / image.drawWidth == pytest.approx(1.82)
+
+
+def test_scaled_image_at_exactly_the_limit_is_not_changed() -> None:
+    """Justo en el tope no se toca."""
+    height = report_layout.MAX_IMAGE_HEIGHT
+    image = report_layout.scaled_image(real_png(1000, 1250), height / 1.25)
+    assert image.drawHeight == pytest.approx(height)
+    assert image.drawWidth == pytest.approx(height / 1.25)
+
+
+def test_the_height_limit_leaves_room_inside_the_page_frame() -> None:
+    """El tope de alto es menor que el marco útil de la página A4 (márgenes de 2 cm)."""
+    frame_height = A4[1] - 4 * cm
+    assert report_layout.MAX_IMAGE_HEIGHT < frame_height
