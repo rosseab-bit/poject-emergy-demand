@@ -50,7 +50,7 @@ Total: 9 minutos, con 1 de margen. Si te pasás, recortá la demo (diapositiva 7
 *(Cambiar a Atlas o a la diapositiva.)* Cada paso del pipeline queda en la colección `logs` de MongoDB, atado al `run_id`, con su nombre, el tipo de evento y la duración. Esta consulta lista los cuatro pasos más lentos de la corrida. Esos eventos están en MongoDB, y el mismo `run_id` une los logs con los resultados y las predicciones de la corrida.»
 
 **8. Qué se puede afirmar y qué no (0:45).**
-«Lo que sí: el método no usa datos futuros, los resultados se reproducen —en un clon limpio dieron idénticos y también al pasar a MongoDB— y hay 491 tests con cobertura total. Lo que no: no puedo afirmar que haya señal clara al anticipar, ni que un modelo sea mejor que otro, ni que las probabilidades estén calibradas. El valor del trabajo está en el método y la trazabilidad. Para seguir: más historia y temperatura diaria.»
+«Lo que sí: el método no usa datos futuros, los resultados se reproducen —en un clon limpio dieron idénticos y también al pasar a MongoDB— y hay 493 tests con cobertura total. Lo que no: no puedo afirmar que haya señal clara al anticipar, ni que un modelo sea mejor que otro, ni que las probabilidades estén calibradas. El valor del trabajo está en el método y la trazabilidad. Para seguir: más historia y temperatura diaria.»
 
 ## Demo paso a paso (diapositiva 7)
 
