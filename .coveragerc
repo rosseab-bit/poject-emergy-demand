@@ -1,0 +1,15 @@
+# Cobertura del código del proyecto (no de los tests ni del entorno).
+# Uso:  coverage run -m pytest && coverage report
+[run]
+branch = True
+source = .
+omit =
+    tests/*
+    .venv/*
+    docs/*
+
+[report]
+show_missing = True
+skip_empty = True
+exclude_also =
+    if __name__ == .__main__.:

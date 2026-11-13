@@ -271,3 +271,21 @@ def test_a_pdf_can_be_built_with_one_model_in_one_scenario(
     )
     pdf = report.build_pdf(only, report_charts.render_charts(only))
     assert pdf.startswith(b"%PDF-") and len(re.findall(rb"/Type /Page\b", pdf)) >= 4
+
+
+def test_report_needs_the_clean_data_too(report_run: dict, tmp_path: Path) -> None:
+    """Con resultados guardados pero sin datos limpios (ETL borrado), lo dice."""
+    empty_structured = tmp_path / "structured.db"
+    db.init_structured_db(empty_structured)
+    with db.get_connection(empty_structured) as conn:
+        conn.execute(
+            "INSERT INTO runs (run_id, started_at, status, seed) VALUES (?, 'ahora', 'ok', 7)",
+            (report_run["run_id"],),
+        )
+    with pytest.raises(ValueError, match="ejecutá el ETL"):
+        report_data.collect_report_data(
+            report_run["run_id"],
+            db_path=empty_structured,
+            unstructured_path=report_run["unstructured_path"],
+            models_dir=report_run["models_dir"],
+        )

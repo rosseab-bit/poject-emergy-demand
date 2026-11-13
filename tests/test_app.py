@@ -278,3 +278,15 @@ def test_flash_after_etl_is_shown_once(tmp_config: Path) -> None:
     assert any("ETL ejecutado" in s.value for s in at.success)
     at.sidebar.radio[0].set_value("Logs").run()
     assert len(at.success) == 0
+
+
+def test_sidebar_survives_a_run_whose_summary_cannot_be_read(
+    tmp_config: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Si el resumen de la corrida elegida no se puede leer, la barra no se rompe."""
+    run_id = pipeline.run_etl()
+    monkeypatch.setattr(queries, "run_summary", lambda _run_id: None)
+    at = run_app()
+    assert not at.exception
+    assert at.sidebar.selectbox[0].value == run_id
+    assert "Estado:" not in sidebar_text(at)

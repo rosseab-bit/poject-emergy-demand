@@ -173,3 +173,19 @@ def test_muted_nests_and_silences_log_step(
     assert read_logs(db_path) == []
     paso()
     assert len(read_logs(db_path)) == 2
+
+
+def test_setup_logging_adds_its_handler_even_with_other_handlers_or_paths(
+    tmp_path: Path,
+) -> None:
+    """Otros handlers no cuentan como el nuestro, y otra base agrega otro handler."""
+    root = logging.getLogger(logger.ROOT_LOGGER_NAME)
+    other = logging.StreamHandler()
+    root.addHandler(other)
+    first, second = tmp_path / "a.db", tmp_path / "b.db"
+    logger.setup_logging(first)
+    logger.setup_logging(second)
+    logger.setup_logging(first)  # ya estaba: no se repite
+    ours = [h for h in root.handlers if isinstance(h, logger.SQLiteHandler)]
+    assert [h.db_path for h in ours] == [first, second]
+    assert other in root.handlers  # el ajeno quedó como estaba

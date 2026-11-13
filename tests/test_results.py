@@ -326,3 +326,29 @@ def test_has_results(saved: tuple[Path, Path]) -> None:
     """Indica si la corrida tiene resultados guardados."""
     assert results.has_results("run1", saved[0]) is True
     assert results.has_results("otra", saved[0]) is False
+
+
+def test_to_json_rejects_values_it_cannot_serialize() -> None:
+    """Un tipo que no es JSON ni numpy da un TypeError con su nombre."""
+    with pytest.raises(TypeError, match="object"):
+        results.to_json({"x": object()})
+
+
+def test_save_model_run_refuses_to_overwrite_an_existing_model_file(
+    model_run: ModelRun, udb: Path, tmp_path: Path
+) -> None:
+    """Si el .joblib ya existe (sin fila en la base), no se pisa y no se guarda nada."""
+    models_dir = tmp_path / "models"
+    models_dir.mkdir()
+    existing = models_dir / results.model_filename("run1", "A", "logistic_regression")
+    existing.write_bytes(b"un modelo anterior")
+    with pytest.raises(FileExistsError):
+        results.save_model_run("run1", model_run, models_dir, udb)
+    assert existing.read_bytes() == b"un modelo anterior"
+    assert results.saved_models("run1", "A", udb) == []
+
+
+def test_load_run_config_of_an_unknown_run_raises(udb: Path) -> None:
+    """Pedir la configuración de una corrida sin configuración guardada falla claro."""
+    with pytest.raises(LookupError, match="noexiste"):
+        results.load_run_config("noexiste", udb)

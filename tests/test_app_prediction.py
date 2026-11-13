@@ -185,3 +185,24 @@ def test_sidebar_marks_the_prediction_step_as_done(use_trained: dict) -> None:
     assert not at.exception
     assert "✅ Predicción — hecho" in "\n".join(m.value for m in at.sidebar.markdown)
     assert "⬜ Reporte — pendiente" in "\n".join(m.value for m in at.sidebar.markdown)
+
+
+def test_prediction_says_so_when_no_model_beats_the_reference(
+    use_trained: dict, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Si ningún modelo supera a «siempre alta», el resultado lo dice como error."""
+    real = queries.latest_prediction
+
+    def none_beats(run_id: str) -> dict | None:
+        doc = real(run_id)
+        if doc is not None:
+            for model in doc["modelos"].values():
+                model["supera_referencia"] = False
+        return doc
+
+    predict_click(open_page())  # asegura que haya una predicción guardada
+    monkeypatch.setattr(queries, "latest_prediction", none_beats)
+    at = open_page()
+    assert not at.exception
+    assert any("Ningún modelo superó en el hold-out" in e.value for e in at.error)
+    assert not any("únicamente superaron" in i.value for i in at.info)

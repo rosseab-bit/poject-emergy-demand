@@ -381,3 +381,11 @@ def test_rollback_still_discards_the_write_with_the_new_settings(db_path: Path) 
         raise RuntimeError("falla")
     assert db.checkpoint(db_path) is True
     assert count_rows(db_path, "logs") == 0
+
+
+def test_checkpoint_of_an_unreadable_file_is_best_effort(tmp_path: Path) -> None:
+    """Un archivo que no es una base SQLite no hace fallar el final de una corrida."""
+    broken = tmp_path / "roto.db"
+    broken.write_bytes(b"esto no es una base de datos sqlite" * 50)
+    assert db.checkpoint(broken) is False
+    assert broken.read_bytes().startswith(b"esto no es")  # no se tocó

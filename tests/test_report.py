@@ -518,3 +518,47 @@ def test_the_height_limit_leaves_room_inside_the_page_frame() -> None:
     """El tope de alto es menor que el marco útil de la página A4 (márgenes de 2 cm)."""
     frame_height = A4[1] - 4 * cm
     assert report_layout.MAX_IMAGE_HEIGHT < frame_height
+
+
+def test_cover_commit_text_depends_only_on_the_stored_configuration(
+    trained_report_data,
+) -> None:
+    """La portada describe el commit según lo guardado, no según el estado actual de Git."""
+
+    def commit_row(config_changes: dict) -> str:
+        config = {**trained_report_data.config, **config_changes}
+        data = dataclasses.replace(trained_report_data, config=config)
+        return dict(map(tuple, report_sections._cover_rows(data)))["Commit de Git"]
+
+    assert commit_row({"git_commit": "abc123", "git_dirty": False}) == "abc123"
+    assert commit_row({"git_commit": "abc123", "git_dirty": True}) == (
+        "abc123 (con cambios sin commitear)"
+    )
+    assert commit_row({"git_commit": None, "git_dirty": None}) == "no registrado"
+
+
+def test_cover_shows_the_notices_section_only_when_there_are_notes(
+    trained_report_data, charts
+) -> None:
+    """Sin avisos la portada no trae la sección «Avisos»; con avisos, sí."""
+    clean = dataclasses.replace(trained_report_data, notes=[])
+    noted = dataclasses.replace(trained_report_data, notes=["Un aviso cualquiera"])
+    assert "Avisos" not in extract_text(
+        report.build_pdf(clean, charts, page_compression=0)
+    )
+    with_notes = extract_text(report.build_pdf(noted, charts, page_compression=0))
+    assert "Avisos" in with_notes
+    assert "Un aviso cualquiera" in with_notes
+
+
+def test_recommendation_section_works_without_the_variables_chart(
+    trained_report_data, charts
+) -> None:
+    """Si no se pudo dibujar el gráfico de variables, la conclusión sale igual."""
+    without = {k: v for k, v in charts.items() if not k.startswith("importance_")}
+    pdf = report.build_pdf(trained_report_data, without, page_compression=0)
+    out = extract_text(pdf)
+    assert contains(out, trained_report_data.conclusions["A"].explanation.headline)
+    assert len(pdf) < len(
+        report.build_pdf(trained_report_data, charts, page_compression=0)
+    )
