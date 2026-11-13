@@ -9,7 +9,17 @@ from pathlib import Path
 
 import pytest
 
-from src import config, queries, recommend, report, report_charts, report_data
+from src import (
+    config,
+    explain,
+    queries,
+    recommend,
+    report,
+    report_charts,
+    report_data,
+    report_layout,
+    report_sections,
+)
 
 
 def extract_text(pdf: bytes) -> str:
@@ -157,11 +167,11 @@ def test_every_conclusion_matches_the_rule_and_the_text(
 ) -> None:
     """El titular de cada escenario es el que redactan las reglas, con su etiqueta."""
     for scenario, conclusion in trained_report_data.conclusions.items():
-        label, _status = report.CATEGORY_STATUS[conclusion.verdict.category]
+        label, _status = report_layout.CATEGORY_STATUS[conclusion.verdict.category]
         assert label in text
-        assert contains(text, report.pdf_text(conclusion.explanation.headline))
+        assert contains(text, report_layout.pdf_text(conclusion.explanation.headline))
         for reason in conclusion.explanation.reasons:
-            assert contains(text, report.pdf_text(reason)), (scenario, reason)
+            assert contains(text, report_layout.pdf_text(reason)), (scenario, reason)
 
 
 def test_comparison_table_says_whether_each_model_beats_the_reference(
@@ -172,7 +182,7 @@ def test_comparison_table_says_whether_each_model_beats_the_reference(
     assert "¿Supera la referencia?" in text
     for conclusion in trained_report_data.conclusions.values():
         for score in conclusion.scores:
-            assert f"{report.fmt(score.cv_mean)} ± {report.fmt(score.cv_std)}" in text
+            assert f"{explain.fmt(score.cv_mean)} ± {explain.fmt(score.cv_std)}" in text
             assert isinstance(recommend.beats_reference(score), bool)
     assert "Escenario A contra B" in text and "Diferencia (B - A)" in text
 
@@ -184,9 +194,9 @@ def test_results_section_has_params_and_holdout_metrics(
     assert "Validación cruzada (solo con datos de entrenamiento)" in text
     assert "Hold-out (la clase positiva es «alta»)" in text
     for doc in trained_report_data.docs:
-        assert report.format_params(doc["params"]) in text
-        assert ", ".join(report.fmt(s, 2) for s in doc["cv"]["scores"]) in text
-        assert report.fmt(doc["holdout"]["accuracy"]) in text
+        assert report_layout.format_params(doc["params"]) in text
+        assert ", ".join(explain.fmt(s, 2) for s in doc["cv"]["scores"]) in text
+        assert explain.fmt(doc["holdout"]["accuracy"]) in text
     assert "clf__" not in text
 
 
@@ -209,7 +219,7 @@ def test_limits_add_the_reference_warning_only_when_it_applies(
     """La advertencia sobre «siempre alta» aparece solo si el A no la supera."""
     warning = "En el escenario A ningún modelo supera con claridad"
     base = trained_report_data
-    assert any(warning in item for item in report.limits(base)) != (
+    assert any(warning in item for item in report_sections.limits(base)) != (
         base.conclusions["A"].verdict.recommend_for_use
     )
     forced = dataclasses.replace(
@@ -224,7 +234,7 @@ def test_limits_add_the_reference_warning_only_when_it_applies(
             ),
         },
     )
-    assert not any(warning in item for item in report.limits(forced))
+    assert not any(warning in item for item in report_sections.limits(forced))
 
 
 def test_predictions_section_without_predictions(trained_report_data, charts) -> None:
@@ -274,18 +284,18 @@ def test_dynamic_text_is_escaped_not_interpreted(trained_report_data, charts) ->
 
 def test_unsupported_symbols_are_replaced_so_helvetica_can_print_them() -> None:
     """El signo menos tipográfico y otros símbolos se reemplazan por ASCII."""
-    assert report.pdf_text("−0,5") == "-0,5"
-    assert report.pdf_text("a → b") == "a -> b"
-    assert report.pdf_text("«alta» ± 0,1 °C") == "«alta» ± 0,1 °C"
-    assert report.esc("a < b & c") == "a &lt; b &amp; c"
+    assert report_layout.pdf_text("−0,5") == "-0,5"
+    assert report_layout.pdf_text("a → b") == "a -> b"
+    assert report_layout.pdf_text("«alta» ± 0,1 °C") == "«alta» ± 0,1 °C"
+    assert report_layout.esc("a < b & c") == "a &lt; b &amp; c"
 
 
 def test_all_report_text_is_encodable_in_the_pdf_font(trained_report_data) -> None:
     """Todo texto redactado por las reglas se puede imprimir con Helvetica (cp1252)."""
     for conclusion in trained_report_data.conclusions.values():
         texts = [conclusion.explanation.headline, *conclusion.explanation.reasons]
-        for item in [*texts, *report.limits(trained_report_data)]:
-            report.pdf_text(item).encode("cp1252")
+        for item in [*texts, *report_sections.limits(trained_report_data)]:
+            report_layout.pdf_text(item).encode("cp1252")
 
 
 def test_report_with_a_single_scenario_still_builds(trained_report_data) -> None:
@@ -309,9 +319,9 @@ def test_report_with_a_single_scenario_still_builds(trained_report_data) -> None
 
 def test_every_category_has_a_written_label_and_a_known_color() -> None:
     """El estado nunca depende solo del color: cada categoría tiene etiqueta escrita."""
-    assert set(report.CATEGORY_STATUS) == set(recommend.CATEGORIES)
-    for label, status in report.CATEGORY_STATUS.values():
-        assert label and status in report.STATUS
+    assert set(report_layout.CATEGORY_STATUS) == set(recommend.CATEGORIES)
+    for label, status in report_layout.CATEGORY_STATUS.values():
+        assert label and status in report_layout.STATUS
 
 
 def test_report_path_and_exists(tmp_path: Path) -> None:
@@ -441,5 +451,7 @@ def test_a_fresh_process_generates_the_same_report(
         trained_run["models_dir"],
     )
     child_text = extract_text(out.read_bytes())
-    assert report.pdf_text(here.conclusions["A"].explanation.headline) in child_text
+    assert (
+        report_layout.pdf_text(here.conclusions["A"].explanation.headline) in child_text
+    )
     assert trained_run["run_id"] in child_text
