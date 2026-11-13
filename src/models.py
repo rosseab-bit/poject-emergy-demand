@@ -64,7 +64,9 @@ def positive_weight(y_train: pd.Series) -> float:
     return (len(y_train) - positives) / positives
 
 
-def _make_classifier(name: str, y_train: pd.Series | None, seed: int):
+def _make_classifier(
+    name: str, y_train: pd.Series | None, seed: int
+) -> LogisticRegression | RandomForestClassifier | XGBClassifier:
     """Crea el clasificador, con la semilla dada y el desbalance tratado."""
     if name == LOGISTIC_REGRESSION:
         return LogisticRegression(

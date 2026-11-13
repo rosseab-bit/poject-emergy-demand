@@ -3,13 +3,28 @@
 import dataclasses
 import json
 import re
+import sqlite3
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+from matplotlib.figure import Figure
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.units import cm
+from support import main_file_only
 
-from src import config, queries, recommend, report, report_charts, report_data
+from src import (
+    config,
+    explain,
+    queries,
+    recommend,
+    report,
+    report_charts,
+    report_data,
+    report_layout,
+    report_sections,
+)
 
 
 def extract_text(pdf: bytes) -> str:
@@ -157,11 +172,11 @@ def test_every_conclusion_matches_the_rule_and_the_text(
 ) -> None:
     """El titular de cada escenario es el que redactan las reglas, con su etiqueta."""
     for scenario, conclusion in trained_report_data.conclusions.items():
-        label, _status = report.CATEGORY_STATUS[conclusion.verdict.category]
+        label, _status = report_layout.CATEGORY_STATUS[conclusion.verdict.category]
         assert label in text
-        assert contains(text, report.pdf_text(conclusion.explanation.headline))
+        assert contains(text, report_layout.pdf_text(conclusion.explanation.headline))
         for reason in conclusion.explanation.reasons:
-            assert contains(text, report.pdf_text(reason)), (scenario, reason)
+            assert contains(text, report_layout.pdf_text(reason)), (scenario, reason)
 
 
 def test_comparison_table_says_whether_each_model_beats_the_reference(
@@ -172,7 +187,7 @@ def test_comparison_table_says_whether_each_model_beats_the_reference(
     assert "¿Supera la referencia?" in text
     for conclusion in trained_report_data.conclusions.values():
         for score in conclusion.scores:
-            assert f"{report.fmt(score.cv_mean)} ± {report.fmt(score.cv_std)}" in text
+            assert f"{explain.fmt(score.cv_mean)} ± {explain.fmt(score.cv_std)}" in text
             assert isinstance(recommend.beats_reference(score), bool)
     assert "Escenario A contra B" in text and "Diferencia (B - A)" in text
 
@@ -184,9 +199,9 @@ def test_results_section_has_params_and_holdout_metrics(
     assert "Validación cruzada (solo con datos de entrenamiento)" in text
     assert "Hold-out (la clase positiva es «alta»)" in text
     for doc in trained_report_data.docs:
-        assert report.format_params(doc["params"]) in text
-        assert ", ".join(report.fmt(s, 2) for s in doc["cv"]["scores"]) in text
-        assert report.fmt(doc["holdout"]["accuracy"]) in text
+        assert report_layout.format_params(doc["params"]) in text
+        assert ", ".join(explain.fmt(s, 2) for s in doc["cv"]["scores"]) in text
+        assert explain.fmt(doc["holdout"]["accuracy"]) in text
     assert "clf__" not in text
 
 
@@ -209,7 +224,7 @@ def test_limits_add_the_reference_warning_only_when_it_applies(
     """La advertencia sobre «siempre alta» aparece solo si el A no la supera."""
     warning = "En el escenario A ningún modelo supera con claridad"
     base = trained_report_data
-    assert any(warning in item for item in report.limits(base)) != (
+    assert any(warning in item for item in report_sections.limits(base)) != (
         base.conclusions["A"].verdict.recommend_for_use
     )
     forced = dataclasses.replace(
@@ -224,7 +239,7 @@ def test_limits_add_the_reference_warning_only_when_it_applies(
             ),
         },
     )
-    assert not any(warning in item for item in report.limits(forced))
+    assert not any(warning in item for item in report_sections.limits(forced))
 
 
 def test_predictions_section_without_predictions(trained_report_data, charts) -> None:
@@ -274,18 +289,25 @@ def test_dynamic_text_is_escaped_not_interpreted(trained_report_data, charts) ->
 
 def test_unsupported_symbols_are_replaced_so_helvetica_can_print_them() -> None:
     """El signo menos tipográfico y otros símbolos se reemplazan por ASCII."""
-    assert report.pdf_text("−0,5") == "-0,5"
-    assert report.pdf_text("a → b") == "a -> b"
-    assert report.pdf_text("«alta» ± 0,1 °C") == "«alta» ± 0,1 °C"
-    assert report.esc("a < b & c") == "a &lt; b &amp; c"
+    assert report_layout.pdf_text("−0,5") == "-0,5"
+    assert report_layout.pdf_text("a → b") == "a -> b"
+    assert report_layout.pdf_text("«alta» ± 0,1 °C") == "«alta» ± 0,1 °C"
+    assert report_layout.esc("a < b & c") == "a &lt; b &amp; c"
 
 
 def test_all_report_text_is_encodable_in_the_pdf_font(trained_report_data) -> None:
     """Todo texto redactado por las reglas se puede imprimir con Helvetica (cp1252)."""
+    texts = list(report_sections.limits(trained_report_data))
     for conclusion in trained_report_data.conclusions.values():
-        texts = [conclusion.explanation.headline, *conclusion.explanation.reasons]
-        for item in [*texts, *report.limits(trained_report_data)]:
-            report.pdf_text(item).encode("cp1252")
+        texts += [conclusion.explanation.headline, *conclusion.explanation.reasons]
+    assert len(texts) > 10  # hay texto que revisar
+    unencodable = []
+    for text in texts:
+        try:
+            report_layout.pdf_text(text).encode("cp1252")
+        except UnicodeEncodeError:
+            unencodable.append(text)
+    assert unencodable == []
 
 
 def test_report_with_a_single_scenario_still_builds(trained_report_data) -> None:
@@ -309,9 +331,9 @@ def test_report_with_a_single_scenario_still_builds(trained_report_data) -> None
 
 def test_every_category_has_a_written_label_and_a_known_color() -> None:
     """El estado nunca depende solo del color: cada categoría tiene etiqueta escrita."""
-    assert set(report.CATEGORY_STATUS) == set(recommend.CATEGORIES)
-    for label, status in report.CATEGORY_STATUS.values():
-        assert label and status in report.STATUS
+    assert set(report_layout.CATEGORY_STATUS) == set(recommend.CATEGORIES)
+    for label, status in report_layout.CATEGORY_STATUS.values():
+        assert label and status in report_layout.STATUS
 
 
 def test_report_path_and_exists(tmp_path: Path) -> None:
@@ -321,7 +343,6 @@ def test_report_path_and_exists(tmp_path: Path) -> None:
     assert report.report_exists("abc", tmp_path) is False
 
 
-@pytest.mark.usefixtures("clean_root_logger")
 def test_save_report_writes_and_overwrites(tmp_path: Path) -> None:
     """Guardar crea la carpeta y pisa el archivo anterior."""
     calls = []
@@ -341,7 +362,6 @@ def test_save_report_writes_and_overwrites(tmp_path: Path) -> None:
     assert report.report_exists("r1", target) is True
 
 
-@pytest.mark.usefixtures("clean_root_logger")
 def test_save_report_logs_the_event_under_the_run(tmp_path: Path) -> None:
     """Generar el reporte deja inicio, el evento con el archivo y fin, atados al run_id."""
     db_path = tmp_path / "structured.db"
@@ -358,7 +378,25 @@ def test_save_report_logs_the_event_under_the_run(tmp_path: Path) -> None:
     assert queries.get_logs(db_path=db_path)["run_id"].isna().sum() == 0
 
 
-@pytest.mark.usefixtures("clean_root_logger")
+def test_save_report_leaves_its_log_event_in_the_main_database_file(
+    tmp_path: Path,
+) -> None:
+    """El evento del reporte ya está en el .db principal (sin depender del -wal)."""
+    db_path = tmp_path / "structured.db"
+
+    def fake(run_id, include_predictions, **paths):
+        return b"%PDF-" + b"x" * 100
+
+    report.save_report("r5", True, tmp_path, fake, db_path=db_path)
+    copy = main_file_only(db_path, tmp_path / "copia")
+    conn = sqlite3.connect(copy)
+    try:
+        messages = [r[0] for r in conn.execute("SELECT message FROM logs")]
+    finally:
+        conn.close()
+    assert any(m.startswith("Reporte generado: reporte_r5.pdf") for m in messages)
+
+
 def test_failed_report_is_logged_as_error_and_leaves_no_file(tmp_path: Path) -> None:
     """Si falla la generación, queda el error en logs y no se escribe ningún archivo."""
     db_path = tmp_path / "structured.db"
@@ -441,5 +479,86 @@ def test_a_fresh_process_generates_the_same_report(
         trained_run["models_dir"],
     )
     child_text = extract_text(out.read_bytes())
-    assert report.pdf_text(here.conclusions["A"].explanation.headline) in child_text
+    assert (
+        report_layout.pdf_text(here.conclusions["A"].explanation.headline) in child_text
+    )
     assert trained_run["run_id"] in child_text
+
+
+def real_png(width: int, height: int) -> bytes:
+    """PNG real (en blanco) de exactamente ``width`` por ``height`` píxeles."""
+    figure = Figure(figsize=(width / 100, height / 100))
+    return report_charts.figure_to_png(figure, dpi=100)
+
+
+def test_scaled_image_keeps_the_size_when_it_already_fits() -> None:
+    """Una imagen que entra se escala solo al ancho pedido."""
+    image = report_layout.scaled_image(real_png(1000, 500), 16 * cm)
+    assert image.drawWidth == pytest.approx(16 * cm)
+    assert image.drawHeight == pytest.approx(8 * cm)
+
+
+def test_scaled_image_shrinks_a_tall_image_keeping_its_proportion() -> None:
+    """Una imagen demasiado alta se achica hasta el tope, sin deformarse."""
+    image = report_layout.scaled_image(real_png(1000, 1820), 16 * cm)
+    assert image.drawHeight == pytest.approx(report_layout.MAX_IMAGE_HEIGHT)
+    assert image.drawWidth < 16 * cm
+    assert image.drawHeight / image.drawWidth == pytest.approx(1.82)
+
+
+def test_scaled_image_at_exactly_the_limit_is_not_changed() -> None:
+    """Justo en el tope no se toca."""
+    height = report_layout.MAX_IMAGE_HEIGHT
+    image = report_layout.scaled_image(real_png(1000, 1250), height / 1.25)
+    assert image.drawHeight == pytest.approx(height)
+    assert image.drawWidth == pytest.approx(height / 1.25)
+
+
+def test_the_height_limit_leaves_room_inside_the_page_frame() -> None:
+    """El tope de alto es menor que el marco útil de la página A4 (márgenes de 2 cm)."""
+    frame_height = A4[1] - 4 * cm
+    assert report_layout.MAX_IMAGE_HEIGHT < frame_height
+
+
+def test_cover_commit_text_depends_only_on_the_stored_configuration(
+    trained_report_data,
+) -> None:
+    """La portada describe el commit según lo guardado, no según el estado actual de Git."""
+
+    def commit_row(config_changes: dict) -> str:
+        config = {**trained_report_data.config, **config_changes}
+        data = dataclasses.replace(trained_report_data, config=config)
+        return dict(map(tuple, report_sections._cover_rows(data)))["Commit de Git"]
+
+    assert commit_row({"git_commit": "abc123", "git_dirty": False}) == "abc123"
+    assert commit_row({"git_commit": "abc123", "git_dirty": True}) == (
+        "abc123 (con cambios sin commitear)"
+    )
+    assert commit_row({"git_commit": None, "git_dirty": None}) == "no registrado"
+
+
+def test_cover_shows_the_notices_section_only_when_there_are_notes(
+    trained_report_data, charts
+) -> None:
+    """Sin avisos la portada no trae la sección «Avisos»; con avisos, sí."""
+    clean = dataclasses.replace(trained_report_data, notes=[])
+    noted = dataclasses.replace(trained_report_data, notes=["Un aviso cualquiera"])
+    assert "Avisos" not in extract_text(
+        report.build_pdf(clean, charts, page_compression=0)
+    )
+    with_notes = extract_text(report.build_pdf(noted, charts, page_compression=0))
+    assert "Avisos" in with_notes
+    assert "Un aviso cualquiera" in with_notes
+
+
+def test_recommendation_section_works_without_the_variables_chart(
+    trained_report_data, charts
+) -> None:
+    """Si no se pudo dibujar el gráfico de variables, la conclusión sale igual."""
+    without = {k: v for k, v in charts.items() if not k.startswith("importance_")}
+    pdf = report.build_pdf(trained_report_data, without, page_compression=0)
+    out = extract_text(pdf)
+    assert contains(out, trained_report_data.conclusions["A"].explanation.headline)
+    assert len(pdf) < len(
+        report.build_pdf(trained_report_data, charts, page_compression=0)
+    )

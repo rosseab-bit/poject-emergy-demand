@@ -5,6 +5,9 @@ __pycache__/
 *.pyc
 .pytest_cache/
 .ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
 
 # Datos generados y modelos (se decide al final cómo entregar las bases)
 db/*.db

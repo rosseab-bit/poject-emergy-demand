@@ -3,11 +3,14 @@
 from pathlib import Path
 
 import pytest
+from support import count_rows, main_file_only
 
-from src import config, data, db, pipeline, results, train
+from src import config, data, db, pipeline, queries, results, train
+
+# Integración: corre el ETL y el entrenamiento de verdad.
+pytestmark = pytest.mark.slow
 
 
-@pytest.mark.usefixtures("clean_root_logger")
 def test_run_etl_end_to_end(tmp_path: Path) -> None:
     """El ETL deja 308 filas (259 completas) y todo logueado con su run_id."""
     db_path = tmp_path / "structured.db"
@@ -43,7 +46,6 @@ def test_run_etl_end_to_end(tmp_path: Path) -> None:
         assert orphans.fetchone()[0] == 0
 
 
-@pytest.mark.usefixtures("clean_root_logger")
 def test_run_etl_failure_is_logged_and_run_marked_error(tmp_path: Path) -> None:
     """Si el CSV es inválido, la corrida queda en error y el error en logs."""
     db_path = tmp_path / "structured.db"
@@ -62,7 +64,7 @@ def test_run_etl_failure_is_logged_and_run_marked_error(tmp_path: Path) -> None:
     assert len(errors) >= 1
 
 
-@pytest.mark.usefixtures("clean_root_logger")
+# Grilla completa de hiperparámetros: es el test de integración real.
 def test_run_pipeline_trains_saves_and_links_everything(tmp_path: Path) -> None:
     """La corrida completa entrena 6 resultados y los guarda atados al run_id."""
     db_path = tmp_path / "structured.db"
@@ -115,7 +117,6 @@ def test_run_pipeline_trains_saves_and_links_everything(tmp_path: Path) -> None:
         assert results.load_model(doc, models_dir) is not None
 
 
-@pytest.mark.usefixtures("clean_root_logger")
 def test_run_etl_records_the_given_seed(tmp_path: Path) -> None:
     """La semilla elegida queda en la tabla runs."""
     db_path = tmp_path / "structured.db"
@@ -138,7 +139,7 @@ def paths(tmp_path: Path) -> dict:
     }
 
 
-@pytest.mark.usefixtures("clean_root_logger")
+@pytest.mark.usefixtures("small_grids")
 def test_training_continues_the_etl_run(paths: dict) -> None:
     """Entrenar continúa el run_id del ETL: una sola corrida, todo atado a ella."""
     run_id = pipeline.run_etl(db_path=paths["db_path"], seed=7)
@@ -181,7 +182,37 @@ def test_training_continues_the_etl_run(paths: dict) -> None:
     assert seed == 7
 
 
-@pytest.mark.usefixtures("clean_root_logger")
+@pytest.mark.usefixtures("small_grids")
+def test_a_finished_run_leaves_both_database_files_complete(
+    paths: dict, tmp_path: Path
+) -> None:
+    """Al terminar cada paso, copiar solo los .db (sin -wal) trae todo lo escrito."""
+    run_id = pipeline.run_etl(db_path=paths["db_path"], seed=7)
+    etl_copy = main_file_only(paths["db_path"], tmp_path / "tras_etl")
+    assert count_rows(etl_copy, "datos_limpios") == 308
+    assert count_rows(etl_copy, "logs") == len(
+        queries.get_logs(db_path=paths["db_path"])
+    )
+
+    pipeline.run_training(
+        run_id, scenarios=("A",), model_names=("logistic_regression",), **paths
+    )
+    structured = main_file_only(paths["db_path"], tmp_path / "tras_entrenar")
+    unstructured = main_file_only(
+        paths["unstructured_path"], tmp_path / "tras_entrenar"
+    )
+    assert count_rows(structured, "logs") == len(
+        queries.get_logs(db_path=paths["db_path"])
+    )
+    assert count_rows(structured, "runs") == 1
+    assert count_rows(unstructured, "resultados_modelos") == 1
+    assert count_rows(unstructured, "configuracion") == 1
+    for db_file in (paths["db_path"], paths["unstructured_path"]):
+        wal = Path(f"{db_file}-wal")
+        assert not wal.exists() or wal.stat().st_size == 0
+
+
+@pytest.mark.usefixtures("small_grids")
 def test_training_twice_on_same_run_is_rejected(paths: dict) -> None:
     """Una corrida no se entrena dos veces: hay que iniciar otra."""
     run_id = pipeline.run_etl(db_path=paths["db_path"])
@@ -190,7 +221,6 @@ def test_training_twice_on_same_run_is_rejected(paths: dict) -> None:
         pipeline.run_training(run_id, scenarios=("A",), model_names=LR, **paths)
 
 
-@pytest.mark.usefixtures("clean_root_logger")
 def test_training_rejects_unknown_run_and_missing_etl(paths: dict) -> None:
     """Sin corrida o sin ETL previo se pide ejecutar el ETL, sin tocar nada."""
     with pytest.raises(ValueError, match="No existe la corrida"):
@@ -202,7 +232,6 @@ def test_training_rejects_unknown_run_and_missing_etl(paths: dict) -> None:
     assert db.get_run(empty_run, paths["db_path"])["status"] == "running"
 
 
-@pytest.mark.usefixtures("clean_root_logger")
 def test_failed_training_marks_run_as_error(
     paths: dict, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -221,3 +250,20 @@ def test_failed_training_marks_run_as_error(
             "SELECT COUNT(*) FROM logs WHERE level = 'ERROR' AND run_id = ?", (run_id,)
         ).fetchone()[0]
     assert errors >= 1
+
+
+def test_main_runs_the_whole_pipeline_with_console_logging(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """La línea de comandos configura el log por consola y corre el pipeline una vez."""
+    calls: dict[str, object] = {"runs": 0}
+    monkeypatch.setattr(
+        pipeline.logging, "basicConfig", lambda **kwargs: calls.update(config=kwargs)
+    )
+    monkeypatch.setattr(
+        pipeline, "run_pipeline", lambda: calls.update(runs=calls["runs"] + 1)
+    )
+    pipeline.main()
+    assert calls["runs"] == 1
+    assert calls["config"]["level"] == pipeline.logging.INFO
+    assert "%(message)s" in calls["config"]["format"]

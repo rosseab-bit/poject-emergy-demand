@@ -4,30 +4,11 @@ from pathlib import Path
 
 import pytest
 from streamlit.testing.v1 import AppTest
+from support import go_to, sidebar_text
+from support import start_app as run_app
 
 from app_pages.sidebar import PAGE_NAMES
 from src import config, db, models, pipeline, queries, train
-
-APP_PATH = config.ROOT_DIR / "app.py"
-
-
-@pytest.fixture
-def tmp_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Apunta las bases y los modelos de config a una carpeta temporal."""
-    monkeypatch.setattr(config, "STRUCTURED_DB_PATH", tmp_path / "structured.db")
-    monkeypatch.setattr(config, "UNSTRUCTURED_DB_PATH", tmp_path / "unstructured.db")
-    monkeypatch.setattr(config, "MODELS_DIR", tmp_path / "models")
-    return tmp_path
-
-
-def run_app() -> AppTest:
-    """Ejecuta app.py y devuelve el resultado."""
-    return AppTest.from_file(str(APP_PATH), default_timeout=60).run()
-
-
-def sidebar_text(at: AppTest) -> str:
-    """Todo el texto markdown de la barra lateral, en un solo string."""
-    return "\n".join(m.value for m in at.sidebar.markdown)
 
 
 def test_app_starts_without_runs(tmp_config: Path) -> None:
@@ -40,7 +21,6 @@ def test_app_starts_without_runs(tmp_config: Path) -> None:
     assert at.sidebar.radio[0].value == "Datos"
 
 
-@pytest.mark.usefixtures("clean_root_logger")
 def test_sidebar_shows_current_run_and_steps(tmp_config: Path) -> None:
     """Con una corrida con ETL muestra run_id, semilla, hash pendiente y pasos."""
     run_id = pipeline.run_etl(seed=7)
@@ -56,7 +36,6 @@ def test_sidebar_shows_current_run_and_steps(tmp_config: Path) -> None:
     assert at.sidebar.selectbox[0].value == run_id
 
 
-@pytest.mark.usefixtures("clean_root_logger")
 def test_selector_opens_an_older_run(tmp_config: Path) -> None:
     """El selector deja abrir una corrida anterior y la barra se actualiza."""
     old = pipeline.run_etl(seed=3)
@@ -99,11 +78,6 @@ def test_pending_run_is_applied_before_the_selector(tmp_config: Path) -> None:
     assert at.sidebar.selectbox[0].value == first
 
 
-def go_to(at: AppTest, page: str) -> AppTest:
-    """Navega a una página de la barra lateral."""
-    return at.sidebar.radio[0].set_value(page).run()
-
-
 def metrics(at: AppTest) -> dict[str, str]:
     """Etiqueta y valor de todas las métricas en pantalla."""
     return {m.label: m.value for m in at.metric}
@@ -119,7 +93,6 @@ def test_data_page_before_etl_asks_to_run_it(tmp_config: Path) -> None:
     assert len(at.dataframe) == 0
 
 
-@pytest.mark.usefixtures("clean_root_logger")
 def test_etl_button_creates_a_run_and_shows_results(tmp_config: Path) -> None:
     """El botón corre el ETL con la semilla de la barra y muestra todo."""
     at = run_app()
@@ -153,7 +126,6 @@ def test_etl_button_creates_a_run_and_shows_results(tmp_config: Path) -> None:
     assert len(at.dataframe[0].value) == 308
 
 
-@pytest.mark.usefixtures("clean_root_logger")
 def test_data_page_keeps_results_after_reopening_the_app(tmp_config: Path) -> None:
     """Los resultados salen de las bases: una sesión nueva los sigue viendo."""
     pipeline.run_etl()
@@ -163,7 +135,6 @@ def test_data_page_keeps_results_after_reopening_the_app(tmp_config: Path) -> No
     assert len(at.get("vega_lite_chart")) == 3
 
 
-@pytest.mark.usefixtures("clean_root_logger")
 def test_data_page_shows_the_temperature_assumption(tmp_config: Path) -> None:
     """El supuesto de la zona de la temperatura está a la vista."""
     at = go_to(run_app(), "Datos")
@@ -171,7 +142,6 @@ def test_data_page_shows_the_temperature_assumption(tmp_config: Path) -> None:
     assert any("nivel mensual" in m.value for m in at.markdown)
 
 
-@pytest.mark.usefixtures("clean_root_logger")
 def test_etl_failure_is_shown_not_raised(
     tmp_config: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -214,7 +184,6 @@ def test_training_page_with_run_without_etl_asks_for_etl(tmp_config: Path) -> No
     assert len(at.button) == 0
 
 
-@pytest.mark.usefixtures("clean_root_logger")
 def test_training_page_offers_all_options_after_etl(tmp_config: Path) -> None:
     """Con el ETL hecho ofrece los 2 escenarios y los 3 modelos y la semilla."""
     pipeline.run_etl(seed=5)
@@ -227,7 +196,6 @@ def test_training_page_offers_all_options_after_etl(tmp_config: Path) -> None:
     assert any("Semilla de esta corrida: **5**" in c.value for c in at.caption)
 
 
-@pytest.mark.usefixtures("clean_root_logger")
 def test_train_button_is_disabled_without_selection(tmp_config: Path) -> None:
     """Sin escenarios o sin modelos el botón queda deshabilitado."""
     pipeline.run_etl()
@@ -238,7 +206,6 @@ def test_train_button_is_disabled_without_selection(tmp_config: Path) -> None:
     assert at.button[0].disabled is True
 
 
-@pytest.mark.usefixtures("clean_root_logger")
 def test_training_button_trains_and_shows_saved_results(tmp_config: Path) -> None:
     """Entrenar A con regresión logística guarda el resultado y lo muestra."""
     run_id = pipeline.run_etl(seed=7)
@@ -261,7 +228,6 @@ def test_training_button_trains_and_shows_saved_results(tmp_config: Path) -> Non
     assert shown["F1 «siempre alta»"].iloc[0] == pytest.approx(0.4)
 
 
-@pytest.mark.usefixtures("clean_root_logger")
 def test_training_progress_and_choices_reach_the_pipeline(
     tmp_config: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -287,7 +253,6 @@ def test_training_progress_and_choices_reach_the_pipeline(
     }
 
 
-@pytest.mark.usefixtures("clean_root_logger")
 def test_training_failure_is_shown_and_logged(
     tmp_config: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -306,7 +271,6 @@ def test_training_failure_is_shown_and_logged(
     assert db.get_run(run_id)["status"] == "error"
 
 
-@pytest.mark.usefixtures("clean_root_logger")
 def test_flash_after_etl_is_shown_once(tmp_config: Path) -> None:
     """El aviso 'ETL ejecutado' aparece tras el botón y no se repite."""
     at = go_to(run_app(), "Datos")
@@ -314,3 +278,15 @@ def test_flash_after_etl_is_shown_once(tmp_config: Path) -> None:
     assert any("ETL ejecutado" in s.value for s in at.success)
     at.sidebar.radio[0].set_value("Logs").run()
     assert len(at.success) == 0
+
+
+def test_sidebar_survives_a_run_whose_summary_cannot_be_read(
+    tmp_config: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Si el resumen de la corrida elegida no se puede leer, la barra no se rompe."""
+    run_id = pipeline.run_etl()
+    monkeypatch.setattr(queries, "run_summary", lambda _run_id: None)
+    at = run_app()
+    assert not at.exception
+    assert at.sidebar.selectbox[0].value == run_id
+    assert "Estado:" not in sidebar_text(at)

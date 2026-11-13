@@ -1,15 +1,17 @@
 """Tests de la página Logs."""
 
+from functools import partial
 from pathlib import Path
 
 import pandas as pd
 import pytest
-from streamlit.testing.v1 import AppTest
+from support import open_page as open_page_in
+from support import start_app
 
 from app_pages import tables
 from src import config, pipeline, queries
 
-APP_PATH = config.ROOT_DIR / "app.py"
+open_page = partial(open_page_in, "Logs", timeout=60)
 
 
 @pytest.fixture
@@ -26,12 +28,6 @@ def two_runs(
     failed = queries.list_runs()["run_id"].iloc[0]
     good = pipeline.run_etl(seed=2)
     return {"failed": failed, "good": good}
-
-
-def open_page() -> AppTest:
-    """Abre la página Logs."""
-    at = AppTest.from_file(str(APP_PATH), default_timeout=60).run()
-    return at.sidebar.radio[0].set_value("Logs").run()
 
 
 def test_logs_page_without_data(
@@ -144,7 +140,7 @@ def test_highlight_row_colors_errors_and_warnings_only() -> None:
 def test_viewing_pages_does_not_add_events_to_logs(two_runs: dict) -> None:
     """Abrir Datos y las demás páginas no escribe nada en la tabla logs."""
     before = len(queries.get_logs())
-    at = AppTest.from_file(str(APP_PATH), default_timeout=60).run()  # página Datos
+    at = start_app(60)  # página Datos
     for page in ("Entrenamiento", "Comparación", "Datos", "Logs"):
         at.sidebar.radio[0].set_value(page).run()
         assert not at.exception, page

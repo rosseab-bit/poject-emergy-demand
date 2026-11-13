@@ -2,15 +2,17 @@
 
 import shutil
 import subprocess
+from functools import partial
 from pathlib import Path
 
 import pytest
-from streamlit.testing.v1 import AppTest
+from support import open_page as open_page_in
+from support import sidebar_text
 
 from app_pages import reporte
 from src import config, pipeline, queries, report
 
-APP_PATH = config.ROOT_DIR / "app.py"
+open_page = partial(open_page_in, "Reporte", timeout=300)
 
 
 @pytest.fixture
@@ -18,26 +20,6 @@ def reports_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Carpeta temporal de reportes (los tests no escriben en reports/ del proyecto)."""
     monkeypatch.setattr(config, "REPORTS_DIR", tmp_path / "reports")
     return tmp_path / "reports"
-
-
-@pytest.fixture
-def empty_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Bases y modelos temporales vacíos."""
-    monkeypatch.setattr(config, "STRUCTURED_DB_PATH", tmp_path / "structured.db")
-    monkeypatch.setattr(config, "UNSTRUCTURED_DB_PATH", tmp_path / "unstructured.db")
-    monkeypatch.setattr(config, "MODELS_DIR", tmp_path / "models")
-    return tmp_path
-
-
-def open_page() -> AppTest:
-    """Abre la página Reporte."""
-    at = AppTest.from_file(str(APP_PATH), default_timeout=300).run()
-    return at.sidebar.radio[0].set_value("Reporte").run()
-
-
-def sidebar_text(at: AppTest) -> str:
-    """Todo el texto de la barra lateral."""
-    return "\n".join(m.value for m in at.sidebar.markdown)
 
 
 def stub_save_report(calls: list, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -54,7 +36,7 @@ def stub_save_report(calls: list, monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_report_page_without_runs_asks_to_train(
-    empty_config: Path, reports_dir: Path
+    tmp_config: Path, reports_dir: Path
 ) -> None:
     """Sin corridas pide entrenar y no ofrece generar nada."""
     at = open_page()
@@ -64,9 +46,8 @@ def test_report_page_without_runs_asks_to_train(
     assert len(at.button) == 0 and len(at.checkbox) == 0
 
 
-@pytest.mark.usefixtures("clean_root_logger")
 def test_report_page_with_an_untrained_run_asks_to_train(
-    empty_config: Path, reports_dir: Path
+    tmp_config: Path, reports_dir: Path
 ) -> None:
     """Una corrida con solo el ETL tampoco permite generar el reporte."""
     pipeline.run_etl()
@@ -96,7 +77,6 @@ def test_report_page_lists_the_contents_and_the_option(
     assert "⬜ Reporte — pendiente" in sidebar_text(at)
 
 
-@pytest.mark.usefixtures("clean_root_logger")
 def test_generating_creates_the_pdf_and_offers_the_download(
     use_trained: dict, reports_dir: Path
 ) -> None:
@@ -114,7 +94,6 @@ def test_generating_creates_the_pdf_and_offers_the_download(
     assert any("generalo de nuevo" in c.value for c in at.caption)
 
 
-@pytest.mark.usefixtures("clean_root_logger")
 def test_generating_leaves_an_event_in_logs_under_the_run(
     use_trained: dict, reports_dir: Path
 ) -> None:
@@ -181,7 +160,6 @@ def test_viewing_the_page_adds_no_events_to_logs(
 @pytest.mark.skipif(
     shutil.which("pdftotext") is None, reason="pdftotext no está instalado"
 )
-@pytest.mark.usefixtures("clean_root_logger")
 def test_unchecking_the_option_really_leaves_the_predictions_out(
     use_trained: dict, reports_dir: Path
 ) -> None:

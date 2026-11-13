@@ -3,8 +3,13 @@
 import numpy as np
 import pandas as pd
 import pytest
+from support import real_dataset
 
 from src import config, data, features, models, train
+
+# Estos tests prueban el entrenamiento y la evaluación, no la búsqueda completa de
+# hiperparámetros (esa se ejerce de punta a punta en test_pipeline): grilla chica.
+pytestmark = pytest.mark.usefixtures("small_grids")
 
 
 def make_xy(n: int = 100) -> tuple[pd.DataFrame, pd.Series]:
@@ -123,12 +128,15 @@ class FixedEstimator:
     """Estimador falso que devuelve predicciones fijas."""
 
     def __init__(self, pred: list[int]) -> None:
+        """Guarda las predicciones que devolverá (0 o 1 por fila)."""
         self.pred = np.array(pred)
 
     def predict(self, x: pd.DataFrame) -> np.ndarray:
+        """Devuelve las clases fijas, sin mirar los datos."""
         return self.pred
 
     def predict_proba(self, x: pd.DataFrame) -> np.ndarray:
+        """Devuelve probabilidades coherentes con las clases fijas."""
         return np.column_stack([1 - self.pred * 0.9, self.pred * 0.9])
 
 
@@ -179,11 +187,6 @@ def test_evaluate_real_data_holdout() -> None:
     np.testing.assert_array_equal(
         fitted.estimator.named_steps["imputer"].statistics_, stats_before
     )
-
-
-def real_dataset() -> pd.DataFrame:
-    """Dataset real con variables derivadas y target."""
-    return features.build_dataset(data.flag_repeated_power(data.load_raw()))
 
 
 def test_train_all_covers_every_model_and_scenario() -> None:

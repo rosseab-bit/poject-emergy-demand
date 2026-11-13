@@ -1,20 +1,15 @@
 """Tests de la página Comparación (AppTest sobre una corrida real entrenada)."""
 
+from functools import partial
 from pathlib import Path
 
 import pytest
-from streamlit.testing.v1 import AppTest
+from support import open_page as open_page_in
 
 from app_pages import comparacion
-from src import config, queries, results
+from src import config, pipeline, queries, results
 
-APP_PATH = config.ROOT_DIR / "app.py"
-
-
-def open_page() -> AppTest:
-    """Abre la página Comparación."""
-    at = AppTest.from_file(str(APP_PATH), default_timeout=120).run()
-    return at.sidebar.radio[0].set_value("Comparación").run()
+open_page = partial(open_page_in, "Comparación")
 
 
 def test_comparison_without_results_asks_to_train(
@@ -117,3 +112,22 @@ def test_comparison_uses_the_saved_model_not_memory(use_trained: dict) -> None:
         use_trained["run_id"], "A", "logistic_regression"
     )
     assert len(table) == len(doc["features"])
+
+
+@pytest.mark.usefixtures("small_grids")
+def test_comparison_with_only_scenario_a_trained(tmp_config: Path) -> None:
+    """Entrenar solo el escenario A: sin matrices de B ni comparación A contra B."""
+    run_id = pipeline.run_etl()
+    pipeline.run_training(
+        run_id, scenarios=("A",), model_names=("logistic_regression",)
+    )
+    at = open_page()
+    assert not at.exception
+    titles = [s.value for s in at.main.subheader]
+    assert "Matrices de confusión (hold-out)" in titles
+    assert not any("A contra B" in t for t in titles)
+    page = "\n".join(m.value for m in at.main.markdown)
+    assert "Escenario A · anticipación" in page
+    assert "Escenario B" not in page
+    # Solo la tabla de métricas y una matriz: no hay tabla de A contra B.
+    assert len(at.dataframe) == 2

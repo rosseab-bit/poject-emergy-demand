@@ -1,13 +1,16 @@
 """Tests de la recolección de datos del reporte (solo desde las bases)."""
 
+import dataclasses
 import json
 import logging
+import re
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+from support import isolated_logging, tiny_grids
 
 from src import (
     config,
@@ -17,6 +20,8 @@ from src import (
     predict,
     queries,
     recommend,
+    report,
+    report_charts,
     report_data,
     results,
 )
@@ -33,9 +38,7 @@ def report_run(tmp_path_factory: pytest.TempPathFactory) -> dict:
         "unstructured_path": base / "unstructured.db",
         "models_dir": base / "models",
     }
-    root = logging.getLogger(logger.ROOT_LOGGER_NAME)
-    saved_level, saved_handlers = root.level, list(root.handlers)
-    try:
+    with isolated_logging(), tiny_grids():
         run_id = pipeline.run_etl(db_path=paths["db_path"], seed=7)
         pipeline.run_training(
             run_id,
@@ -47,9 +50,6 @@ def report_run(tmp_path_factory: pytest.TempPathFactory) -> dict:
         predict.predict_next_month(run_id, 12.0, **paths)
         predict.predict_next_month(run_id, 20.0, **paths)
         etl_only = pipeline.run_etl(db_path=paths["db_path"])
-    finally:
-        root.setLevel(saved_level)
-        root.handlers[:] = saved_handlers
     return {"run_id": run_id, "etl_only": etl_only, **paths}
 
 
@@ -243,3 +243,49 @@ def test_multi_model_run_uses_the_same_rule(trained_run: dict) -> None:
             "random_forest",
         }
         assert conclusion.importance is not None
+
+
+def test_a_pdf_can_be_built_with_a_single_model_per_scenario(report_run: dict) -> None:
+    """Entrenar un solo modelo por escenario (la pantalla lo permite) no rompe el PDF.
+
+    Con una sola columna, el gráfico de matrices de confusión queda más alto que la
+    página y ReportLab lanzaba LayoutError.
+    """
+    paths = {k: report_run[k] for k in ("db_path", "unstructured_path", "models_dir")}
+    pdf = report.generate_report(report_run["run_id"], True, **paths)
+    assert pdf.startswith(b"%PDF-") and pdf.rstrip().endswith(b"%%EOF")
+    assert len(re.findall(rb"/Type /Page\b", pdf)) >= 4
+
+
+@pytest.mark.parametrize("scenario", ["A", "B"])
+def test_a_pdf_can_be_built_with_one_model_in_one_scenario(
+    report_run: dict, scenario: str
+) -> None:
+    """Un solo modelo en un solo escenario (A o B) también arma el PDF completo."""
+    base = collect(report_run)
+    only = dataclasses.replace(
+        base,
+        table=base.table[base.table["scenario"] == scenario].reset_index(drop=True),
+        docs=[d for d in base.docs if d["scenario"] == scenario],
+        conclusions={scenario: base.conclusions[scenario]},
+    )
+    pdf = report.build_pdf(only, report_charts.render_charts(only))
+    assert pdf.startswith(b"%PDF-") and len(re.findall(rb"/Type /Page\b", pdf)) >= 4
+
+
+def test_report_needs_the_clean_data_too(report_run: dict, tmp_path: Path) -> None:
+    """Con resultados guardados pero sin datos limpios (ETL borrado), lo dice."""
+    empty_structured = tmp_path / "structured.db"
+    db.init_structured_db(empty_structured)
+    with db.get_connection(empty_structured) as conn:
+        conn.execute(
+            "INSERT INTO runs (run_id, started_at, status, seed) VALUES (?, 'ahora', 'ok', 7)",
+            (report_run["run_id"],),
+        )
+    with pytest.raises(ValueError, match="ejecutá el ETL"):
+        report_data.collect_report_data(
+            report_run["run_id"],
+            db_path=empty_structured,
+            unstructured_path=report_run["unstructured_path"],
+            models_dir=report_run["models_dir"],
+        )

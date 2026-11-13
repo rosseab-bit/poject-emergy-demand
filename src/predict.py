@@ -288,3 +288,4 @@ def predict_next_month(
         )
     finally:
         logger.current_run_id.reset(token)
+        db.checkpoint_all(db_path, unstructured_path)

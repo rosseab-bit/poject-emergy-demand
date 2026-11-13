@@ -74,6 +74,29 @@ CREATE INDEX IF NOT EXISTS idx_predicciones_run_id ON predicciones (run_id);
 """
 
 
+# Cuánto espera un checkpoint a que otras conexiones suelten la base (es de mejor
+# esfuerzo: no debe trabar el final de una corrida).
+CHECKPOINT_TIMEOUT_SECONDS = 2.0
+
+
+def _configure(conn: sqlite3.Connection) -> None:
+    """Ajusta una conexión nueva: filas con nombre, WAL y escrituras rápidas.
+
+    - ``journal_mode=WAL``: lectores y escritor no se bloquean entre sí.
+    - ``synchronous=NORMAL``: en WAL no corrompe la base ante un corte de luz
+      (solo podrían perderse las últimas confirmaciones), y evita un ``fsync``
+      por cada confirmación.
+    - Sin checkpoint al cerrar: con una conexión por operación, SQLite haría un
+      checkpoint (``fsync`` del archivo principal y borrado del ``-wal``) en
+      CADA cierre, lo que costaba ~100 ms por evento de log en un disco lento.
+      El volcado se hace al final de cada corrida con ``checkpoint``.
+    """
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    conn.setconfig(sqlite3.SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, True)
+
+
 @contextmanager
 def get_connection(db_path: Path | None = None) -> Iterator[sqlite3.Connection]:
     """Abre una conexión nueva en modo WAL y la cierra al salir.
@@ -90,8 +113,7 @@ def get_connection(db_path: Path | None = None) -> Iterator[sqlite3.Connection]:
     path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(path, timeout=30)
     try:
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA journal_mode=WAL")
+        _configure(conn)
         yield conn
         conn.commit()
     except BaseException:
@@ -99,6 +121,59 @@ def get_connection(db_path: Path | None = None) -> Iterator[sqlite3.Connection]:
         raise
     finally:
         conn.close()
+
+
+def checkpoint(
+    db_path: Path | None = None, timeout: float = CHECKPOINT_TIMEOUT_SECONDS
+) -> bool:
+    """Vuelca el WAL al archivo principal de la base y lo deja vacío.
+
+    Se llama al final de cada corrida: así el ``.db`` queda completo por sí solo
+    (sin su ``-wal``), que es lo que se entrega o se copia para revisar. Es de
+    mejor esfuerzo: si la base está ocupada no falla, solo devuelve ``False``.
+
+    Args:
+        db_path: ruta de la base; por defecto ``structured.db``.
+        timeout: segundos que espera a que otras conexiones la suelten.
+
+    Returns:
+        ``True`` si se volcó todo; ``False`` si la base no existe o estaba ocupada.
+    """
+    path = db_path if db_path is not None else config.STRUCTURED_DB_PATH
+    if not path.is_file():
+        return False
+    conn = sqlite3.connect(path, timeout=timeout)
+    try:
+        busy, _log_frames, _moved = conn.execute(
+            "PRAGMA wal_checkpoint(TRUNCATE)"
+        ).fetchone()
+    except sqlite3.Error:
+        return False
+    finally:
+        conn.close()
+    return busy == 0
+
+
+def checkpoint_all(
+    structured_path: Path | None = None, unstructured_path: Path | None = None
+) -> bool:
+    """Hace ``checkpoint`` de las dos bases (las que existan).
+
+    Args:
+        structured_path: ruta de ``structured.db``; por defecto la de ``config``.
+        unstructured_path: ruta de ``unstructured.db``; por defecto la de
+            ``config``.
+
+    Returns:
+        ``True`` si las dos se volcaron por completo.
+    """
+    unstructured = (
+        unstructured_path
+        if unstructured_path is not None
+        else config.UNSTRUCTURED_DB_PATH
+    )
+    results = [checkpoint(structured_path), checkpoint(unstructured)]
+    return all(results)
 
 
 def init_structured_db(db_path: Path | None = None) -> None:

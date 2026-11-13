@@ -11,6 +11,8 @@ import io
 
 import numpy as np
 import pandas as pd
+from matplotlib.axes import Axes
+from matplotlib.axis import Axis
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
@@ -51,7 +53,7 @@ def figure_to_png(figure: Figure, dpi: int = DPI) -> bytes:
     return buffer.getvalue()
 
 
-def _style_axes(ax) -> None:
+def _style_axes(ax: Axes) -> None:
     """Estilo común: sin marco, grilla fina, tinta secundaria."""
     ax.set_facecolor(SURFACE)
     for side in ("top", "right"):
@@ -68,7 +70,7 @@ def _decimal(value: float, digits: int = 2) -> str:
     return f"{value:.{digits}f}".replace(".", ",").replace("-", "\u2212")
 
 
-def _comma_axis(axis, digits: int) -> None:
+def _comma_axis(axis: Axis, digits: int) -> None:
     """Hace que los números del eje usen coma decimal."""
     axis.set_major_formatter(FuncFormatter(lambda v, _pos: _decimal(v, digits)))
 
@@ -88,64 +90,66 @@ def short_feature_label(name: str) -> str:
     return label[:1].upper() + label[1:]
 
 
-def f1_comparison_figure(data: ReportData) -> Figure:
-    """F1 en el hold-out por modelo, con el promedio ± desvío de validación.
+def _draw_f1_marks(ax: Axes, rows: pd.DataFrame) -> np.ndarray:
+    """Dibuja las barras del hold-out, el promedio ± desvío y la referencia."""
+    x = np.arange(len(rows))
+    ax.bar(x, rows["f1"], width=0.55, color=BLUE, zorder=2)
+    ax.errorbar(
+        x,
+        rows["cv_mean"],
+        yerr=rows["cv_std"],
+        fmt="o",
+        color=INK,
+        markersize=8,
+        capsize=4,
+        linewidth=1.5,
+        zorder=3,
+    )
+    ax.axhline(
+        float(rows["f1_siempre_alta"].iloc[0]),
+        color=INK_SECONDARY,
+        linestyle=(0, (5, 4)),
+        linewidth=1.5,
+        zorder=1,
+    )
+    return x
 
-    Un panel por escenario. Las barras son el F1 del hold-out; el punto con
-    barra de error es el promedio y el desvío de la validación cruzada; la
-    línea punteada es la regla «siempre alta».
-    """
-    scenarios = list(data.conclusions)
-    figure = Figure(figsize=(3.6 * len(scenarios) + 0.6, 4.2), facecolor=SURFACE)
-    axes = figure.subplots(1, len(scenarios), sharey=True, squeeze=False)[0]
-    for ax, scenario in zip(axes, scenarios, strict=True):
-        rows = data.table[data.table["scenario"] == scenario].reset_index(drop=True)
-        x = np.arange(len(rows))
-        ax.bar(x, rows["f1"], width=0.55, color=BLUE, zorder=2)
-        ax.errorbar(
-            x,
-            rows["cv_mean"],
-            yerr=rows["cv_std"],
-            fmt="o",
+
+def _label_f1_bars(ax: Axes, x: np.ndarray, rows: pd.DataFrame) -> None:
+    """Escribe el F1 de cada barra por encima de todas las marcas."""
+    tops = np.maximum(rows["f1"], rows["cv_mean"] + rows["cv_std"])
+    for position, value, top in zip(x, rows["f1"], tops, strict=True):
+        ax.text(
+            position,
+            min(float(top) + 0.015, 0.95),
+            _decimal(value),
+            ha="center",
+            va="bottom",
+            fontsize=8,
             color=INK,
-            markersize=8,
-            capsize=4,
-            linewidth=1.5,
-            zorder=3,
+            zorder=4,
+            bbox={"facecolor": SURFACE, "edgecolor": "none", "pad": 1.5},
         )
-        ax.axhline(
-            float(rows["f1_siempre_alta"].iloc[0]),
-            color=INK_SECONDARY,
-            linestyle=(0, (5, 4)),
-            linewidth=1.5,
-            zorder=1,
-        )
-        tops = np.maximum(rows["f1"], rows["cv_mean"] + rows["cv_std"])
-        for position, value, top in zip(x, rows["f1"], tops, strict=True):
-            ax.text(
-                position,
-                min(float(top) + 0.015, 0.95),
-                _decimal(value),
-                ha="center",
-                va="bottom",
-                fontsize=8,
-                color=INK,
-                zorder=4,
-                bbox={"facecolor": SURFACE, "edgecolor": "none", "pad": 1.5},
-            )
-        ax.set_xticks(x, [_wrap_model(m) for m in rows["model"]])
-        ax.set_ylim(0, 1)
-        ax.set_xlim(-0.6, len(rows) - 0.4)
-        ax.set_title(
-            SCENARIO_TITLES.get(scenario, f"Escenario {scenario}"),
-            fontsize=10,
-            color=INK,
-            loc="left",
-        )
-        _style_axes(ax)
-        _comma_axis(ax.yaxis, 1)
-    axes[0].set_ylabel("F1 de la clase «alta»", fontsize=9, color=INK_SECONDARY)
-    handles = [
+
+
+def _finish_f1_axes(ax: Axes, x: np.ndarray, rows: pd.DataFrame, scenario: str) -> None:
+    """Ejes, título y estilo de un panel de F1."""
+    ax.set_xticks(x, [_wrap_model(m) for m in rows["model"]])
+    ax.set_ylim(0, 1)
+    ax.set_xlim(-0.6, len(rows) - 0.4)
+    ax.set_title(
+        SCENARIO_TITLES.get(scenario, f"Escenario {scenario}"),
+        fontsize=10,
+        color=INK,
+        loc="left",
+    )
+    _style_axes(ax)
+    _comma_axis(ax.yaxis, 1)
+
+
+def _f1_legend_handles() -> list:
+    """Marcas de la leyenda del gráfico de F1."""
+    return [
         Patch(facecolor=BLUE, label="F1 en el hold-out"),
         Line2D(
             [],
@@ -165,8 +169,26 @@ def f1_comparison_figure(data: ReportData) -> Figure:
             label="Regla «siempre alta» (referencia)",
         ),
     ]
+
+
+def f1_comparison_figure(data: ReportData) -> Figure:
+    """F1 en el hold-out por modelo, con el promedio ± desvío de validación.
+
+    Un panel por escenario. Las barras son el F1 del hold-out; el punto con
+    barra de error es el promedio y el desvío de la validación cruzada; la
+    línea punteada es la regla «siempre alta».
+    """
+    scenarios = list(data.conclusions)
+    figure = Figure(figsize=(3.6 * len(scenarios) + 0.6, 4.2), facecolor=SURFACE)
+    axes = figure.subplots(1, len(scenarios), sharey=True, squeeze=False)[0]
+    for ax, scenario in zip(axes, scenarios, strict=True):
+        rows = data.table[data.table["scenario"] == scenario].reset_index(drop=True)
+        x = _draw_f1_marks(ax, rows)
+        _label_f1_bars(ax, x, rows)
+        _finish_f1_axes(ax, x, rows, scenario)
+    axes[0].set_ylabel("F1 de la clase «alta»", fontsize=9, color=INK_SECONDARY)
     figure.legend(
-        handles=handles,
+        handles=_f1_legend_handles(),
         loc="lower center",
         ncol=3,
         frameon=False,
@@ -181,6 +203,44 @@ def _ramp_color(fraction: float) -> str:
     """Color de la rampa azul para una fracción entre 0 y 1."""
     index = min(int(fraction * len(BLUE_RAMP)), len(BLUE_RAMP) - 1)
     return BLUE_RAMP[index]
+
+
+def _confusion_image(matrix: np.ndarray, n_test: int) -> np.ndarray:
+    """Imagen RGB de una matriz: cada celda con la rampa azul según su conteo."""
+    return np.array(
+        [
+            [_hex_to_rgb(_ramp_color(v / n_test)) for v in line]
+            for line in matrix.tolist()
+        ]
+    )
+
+
+def _draw_confusion_panel(
+    ax: Axes, matrix: np.ndarray, n_test: int, title: str, row_label: str | None
+) -> None:
+    """Dibuja una matriz de confusión con sus conteos y sus ejes."""
+    ax.imshow(_confusion_image(matrix, n_test), aspect="equal")
+    for (i, j), value in np.ndenumerate(matrix):
+        dark = value / n_test >= 0.35
+        ax.text(
+            j,
+            i,
+            str(value),
+            ha="center",
+            va="center",
+            fontsize=14,
+            fontweight="bold",
+            color="#ffffff" if dark else INK,
+        )
+    ax.set_xticks([0, 1], ["normal", "alta"])
+    ax.set_yticks([0, 1], ["normal", "alta"])
+    ax.tick_params(colors=INK_SECONDARY, labelsize=8, length=0)
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+    ax.set_xlabel("Predicho", fontsize=8, color=INK_SECONDARY)
+    if row_label is not None:
+        ax.set_ylabel(row_label, fontsize=8, color=INK_SECONDARY)
+    ax.set_title(title, fontsize=9, color=INK)
 
 
 def confusion_figure(data: ReportData) -> Figure:
@@ -200,39 +260,14 @@ def confusion_figure(data: ReportData) -> Figure:
             if column >= len(names):
                 ax.axis("off")
                 continue
-            matrix = np.array(
-                docs[(scenario, names[column])]["holdout"]["confusion_matrix"]
+            doc = docs[(scenario, names[column])]
+            _draw_confusion_panel(
+                ax,
+                np.array(doc["holdout"]["confusion_matrix"]),
+                n_test,
+                models.model_label(names[column]),
+                f"Escenario {scenario}\nReal" if column == 0 else None,
             )
-            image = np.array(
-                [
-                    [_hex_to_rgb(_ramp_color(v / n_test)) for v in line]
-                    for line in matrix.tolist()
-                ]
-            )
-            ax.imshow(image, aspect="equal")
-            for (i, j), value in np.ndenumerate(matrix):
-                dark = value / n_test >= 0.35
-                ax.text(
-                    j,
-                    i,
-                    str(value),
-                    ha="center",
-                    va="center",
-                    fontsize=14,
-                    fontweight="bold",
-                    color="#ffffff" if dark else INK,
-                )
-            ax.set_xticks([0, 1], ["normal", "alta"])
-            ax.set_yticks([0, 1], ["normal", "alta"])
-            ax.tick_params(colors=INK_SECONDARY, labelsize=8, length=0)
-            for spine in ax.spines.values():
-                spine.set_visible(False)
-            ax.set_xlabel("Predicho", fontsize=8, color=INK_SECONDARY)
-            if column == 0:
-                ax.set_ylabel(
-                    f"Escenario {scenario}\nReal", fontsize=8, color=INK_SECONDARY
-                )
-            ax.set_title(models.model_label(names[column]), fontsize=9, color=INK)
     figure.tight_layout()
     return figure
 
@@ -242,19 +277,8 @@ def _hex_to_rgb(color: str) -> tuple[float, float, float]:
     return tuple(int(color[i : i + 2], 16) / 255 for i in (1, 3, 5))
 
 
-def importance_figure(importance: pd.DataFrame, model: str, scenario: str) -> Figure:
-    """Variables con más peso en un modelo: coeficientes con signo o importancias.
-
-    Args:
-        importance: salida de ``results.feature_importance`` (ordenada por valor
-            absoluto, de mayor a menor).
-        model: nombre del modelo.
-        scenario: ``"A"`` o ``"B"``.
-    """
-    top = importance.head(TOP_VARIABLES)
-    signed = (top["tipo"] == "coeficiente").all()
-    figure = Figure(figsize=(8.4, 0.42 * len(top) + 1.7), facecolor=SURFACE)
-    ax = figure.subplots()
+def _draw_importance_bars(ax: Axes, top: pd.DataFrame, signed: bool) -> None:
+    """Dibuja las barras horizontales con su valor y los límites del eje."""
     y = np.arange(len(top))[::-1]
     values = top["importancia"].to_numpy()
     colors = [RED if v > 0 else BLUE for v in values] if signed else [BLUE] * len(top)
@@ -276,6 +300,10 @@ def importance_figure(importance: pd.DataFrame, model: str, scenario: str) -> Fi
     ax.set_xlim(
         min(values.min(), 0) - (margin if signed else 0), max(values.max(), 0) + margin
     )
+
+
+def _style_importance_axes(ax: Axes, signed: bool) -> None:
+    """Grilla, estilo y rótulo del eje de un gráfico de variables."""
     _comma_axis(ax.xaxis, 2)
     ax.grid(axis="x", color=GRID, linewidth=0.8)
     ax.grid(axis="y", visible=False)
@@ -286,6 +314,38 @@ def importance_figure(importance: pd.DataFrame, model: str, scenario: str) -> Fi
         fontsize=9,
         color=INK_SECONDARY,
     )
+
+
+def _add_sign_legend(figure: Figure) -> None:
+    """Leyenda del signo de los coeficientes (la dirección y el valor también lo dicen)."""
+    figure.legend(
+        handles=[
+            Patch(facecolor=RED, label="Empuja hacia «alta» (coeficiente positivo)"),
+            Patch(facecolor=BLUE, label="Empuja hacia «normal» (coeficiente negativo)"),
+        ],
+        loc="lower center",
+        ncol=2,
+        frameon=False,
+        fontsize=8,
+        labelcolor=INK_SECONDARY,
+    )
+
+
+def importance_figure(importance: pd.DataFrame, model: str, scenario: str) -> Figure:
+    """Variables con más peso en un modelo: coeficientes con signo o importancias.
+
+    Args:
+        importance: salida de ``results.feature_importance`` (ordenada por valor
+            absoluto, de mayor a menor).
+        model: nombre del modelo.
+        scenario: ``"A"`` o ``"B"``.
+    """
+    top = importance.head(TOP_VARIABLES)
+    signed = bool((top["tipo"] == "coeficiente").all())
+    figure = Figure(figsize=(8.4, 0.42 * len(top) + 1.7), facecolor=SURFACE)
+    ax = figure.subplots()
+    _draw_importance_bars(ax, top, signed)
+    _style_importance_axes(ax, signed)
     figure.suptitle(
         f"{models.model_label(model)} · {SCENARIO_TITLES.get(scenario, scenario)}",
         fontsize=10,
@@ -294,21 +354,7 @@ def importance_figure(importance: pd.DataFrame, model: str, scenario: str) -> Fi
         ha="left",
     )
     if signed:
-        figure.legend(
-            handles=[
-                Patch(
-                    facecolor=RED, label="Empuja hacia «alta» (coeficiente positivo)"
-                ),
-                Patch(
-                    facecolor=BLUE, label="Empuja hacia «normal» (coeficiente negativo)"
-                ),
-            ],
-            loc="lower center",
-            ncol=2,
-            frameon=False,
-            fontsize=8,
-            labelcolor=INK_SECONDARY,
-        )
+        _add_sign_legend(figure)
         figure.tight_layout(rect=(0, 0.07, 1, 0.97))
     else:
         figure.tight_layout(rect=(0, 0, 1, 0.97))

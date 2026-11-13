@@ -1,9 +1,11 @@
 """Tests de src/db.py."""
 
 import sqlite3
+import time
 from pathlib import Path
 
 import pytest
+from support import count_rows, main_file_only
 
 from src import config, db
 
@@ -264,3 +266,126 @@ def test_init_adds_predicciones_to_an_old_database_without_losing_data(
         ).fetchone()[0]
     assert {"predicciones", "configuracion", "resultados_modelos"} <= tables
     assert kept == 0.5
+
+
+def write_events(path: Path, n: int) -> None:
+    """Escribe n eventos de log, cada uno con su propia conexión (como el logger)."""
+    for i in range(n):
+        with db.get_connection(path) as conn:
+            conn.execute(
+                "INSERT INTO logs (ts, level, module, message, run_id) "
+                "VALUES ('t', 'INFO', 'm', ?, 'r1')",
+                (f"evento {i}",),
+            )
+
+
+def test_connection_is_wal_with_normal_sync_and_no_checkpoint_on_close(
+    db_path: Path,
+) -> None:
+    """Cada conexión usa WAL, synchronous=NORMAL y no hace checkpoint al cerrar."""
+    db.init_structured_db(db_path)
+    with db.get_connection(db_path) as conn:
+        assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+        assert conn.execute("PRAGMA synchronous").fetchone()[0] == 1  # NORMAL
+        assert conn.getconfig(sqlite3.SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE) is True
+
+
+def test_events_from_many_short_connections_are_all_readable(db_path: Path) -> None:
+    """Lo escrito con una conexión por evento lo ve cualquier conexión nueva."""
+    db.init_structured_db(db_path)
+    write_events(db_path, 25)
+    with db.get_connection(db_path) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM logs").fetchone()[0] == 25
+        last = conn.execute("SELECT message FROM logs ORDER BY id DESC").fetchone()
+    assert last[0] == "evento 24"
+
+
+def test_main_file_alone_is_incomplete_until_the_checkpoint(
+    db_path: Path, tmp_path: Path
+) -> None:
+    """Sin checkpoint, copiar solo el .db pierde lo reciente; con checkpoint, no."""
+    db.init_structured_db(db_path)
+    write_events(db_path, 10)
+    before = main_file_only(db_path, tmp_path / "antes")
+    assert (count_rows(before, "logs") or 0) < 10  # lo reciente vive en el -wal
+
+    assert db.checkpoint(db_path) is True
+    after = main_file_only(db_path, tmp_path / "despues")
+    assert count_rows(after, "logs") == 10
+    wal = Path(f"{db_path}-wal")
+    assert not wal.exists() or wal.stat().st_size == 0
+
+
+def test_checkpoint_keeps_the_data_and_the_database_usable(db_path: Path) -> None:
+    """Después del checkpoint se puede seguir escribiendo y leyendo en WAL."""
+    db.init_structured_db(db_path)
+    write_events(db_path, 5)
+    assert db.checkpoint(db_path) is True
+    write_events(db_path, 3)
+    with db.get_connection(db_path) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM logs").fetchone()[0] == 8
+        assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+
+
+def test_checkpoint_of_a_missing_database_creates_nothing(tmp_path: Path) -> None:
+    """Sin archivo no hay nada que volcar, y no se crea ninguno."""
+    missing = tmp_path / "nada.db"
+    assert db.checkpoint(missing) is False
+    assert not missing.exists()
+    assert db.checkpoint_all(missing, tmp_path / "tampoco.db") is False
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_checkpoint_all_flushes_both_databases(tmp_path: Path) -> None:
+    """checkpoint_all deja completos los dos archivos."""
+    structured, unstructured = tmp_path / "s.db", tmp_path / "u.db"
+    db.init_structured_db(structured)
+    db.init_unstructured_db(unstructured)
+    write_events(structured, 4)
+    insert_prediction(unstructured, "r1", '{"a": 1}')
+    assert db.checkpoint_all(structured, unstructured) is True
+    assert count_rows(main_file_only(structured, tmp_path / "c"), "logs") == 4
+    assert count_rows(main_file_only(unstructured, tmp_path / "c"), "predicciones") == 1
+
+
+def test_checkpoint_is_best_effort_when_another_reader_holds_the_database(
+    db_path: Path, tmp_path: Path
+) -> None:
+    """Con un lector activo no lanza ni se cuelga: devuelve False y no pierde datos."""
+    db.init_structured_db(db_path)
+    write_events(db_path, 3)
+    reader = sqlite3.connect(db_path)
+    reader.execute("BEGIN")
+    reader.execute("SELECT * FROM logs").fetchone()  # fija una vista de la base
+    try:
+        write_events(db_path, 3)
+        started = time.perf_counter()
+        assert db.checkpoint(db_path, timeout=0.2) is False
+        assert time.perf_counter() - started < 5
+        with db.get_connection(db_path) as conn:
+            assert conn.execute("SELECT COUNT(*) FROM logs").fetchone()[0] == 6
+    finally:
+        reader.close()
+    assert db.checkpoint(db_path) is True
+    assert count_rows(main_file_only(db_path, tmp_path / "final"), "logs") == 6
+
+
+def test_rollback_still_discards_the_write_with_the_new_settings(db_path: Path) -> None:
+    """Un bloque que falla no deja nada, aunque no haya checkpoint al cerrar."""
+    db.init_structured_db(db_path)
+    with pytest.raises(RuntimeError), db.get_connection(db_path) as conn:
+        conn.execute(
+            "INSERT INTO logs (ts, level, module, message, run_id) "
+            "VALUES ('t', 'INFO', 'm', 'x', 'r1')"
+        )
+        raise RuntimeError("falla")
+    assert db.checkpoint(db_path) is True
+    assert count_rows(db_path, "logs") == 0
+
+
+def test_checkpoint_of_an_unreadable_file_is_best_effort(tmp_path: Path) -> None:
+    """Un archivo que no es una base SQLite no hace fallar el final de una corrida."""
+    broken = tmp_path / "roto.db"
+    broken.write_bytes(b"esto no es una base de datos sqlite" * 50)
+    assert db.checkpoint(broken) is False
+    assert broken.read_bytes().startswith(b"esto no es")  # no se tocó

@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from support import count_rows, isolated_logging, main_file_only, tiny_grids
 
 from src import config, data, db, logger, pipeline, predict, queries, results
 
@@ -28,9 +29,7 @@ def predict_run(tmp_path_factory: pytest.TempPathFactory) -> dict:
         "unstructured_path": base / "unstructured.db",
         "models_dir": base / "models",
     }
-    root = logging.getLogger(logger.ROOT_LOGGER_NAME)
-    saved_level, saved_handlers = root.level, list(root.handlers)
-    try:
+    with isolated_logging(), tiny_grids():
         run_id = pipeline.run_etl(db_path=paths["db_path"], seed=7)
         pipeline.run_training(
             run_id,
@@ -41,9 +40,6 @@ def predict_run(tmp_path_factory: pytest.TempPathFactory) -> dict:
             model_names=(LR, RF),
         )
         etl_only = pipeline.run_etl(db_path=paths["db_path"])
-    finally:
-        root.setLevel(saved_level)
-        root.handlers[:] = saved_handlers
     return {"run_id": run_id, "etl_only": etl_only, **paths}
 
 
@@ -239,6 +235,20 @@ def test_predict_next_month_rejects_unknown_run_and_untrained_run(
         predict.predict_next_month(
             predict_run["etl_only"], 15.0, **only_paths(predict_run)
         )
+
+
+def test_prediction_leaves_the_database_files_complete(
+    predict_run: dict, tmp_path: Path
+) -> None:
+    """Después de predecir, los .db copiados sin su -wal ya traen la predicción."""
+    predict.predict_next_month(predict_run["run_id"], 16.0, **only_paths(predict_run))
+    saved = len(queries.prediction_history(None, predict_run["unstructured_path"]))
+    unstructured = main_file_only(predict_run["unstructured_path"], tmp_path)
+    structured = main_file_only(predict_run["db_path"], tmp_path)
+    assert count_rows(unstructured, "predicciones") == saved
+    assert count_rows(structured, "logs") == len(
+        queries.get_logs(db_path=predict_run["db_path"])
+    )
 
 
 def test_prediction_works_in_a_fresh_process(predict_run: dict) -> None:

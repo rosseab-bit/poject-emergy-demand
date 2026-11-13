@@ -11,3 +11,4 @@ joblib==1.6.0
 # Desarrollo (tests y linter)
 pytest==9.2.0
 ruff==0.17.4
+coverage==7.17.3

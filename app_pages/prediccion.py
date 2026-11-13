@@ -1,5 +1,6 @@
 """Página Predicción: el mes siguiente al último dato, con los modelos guardados."""
 
+import pandas as pd
 import streamlit as st
 
 from app_pages import state
@@ -30,7 +31,7 @@ def _ready(run_id: str | None) -> bool:
     return True
 
 
-def _render_intro(month) -> None:
+def _render_intro(month: pd.Timestamp) -> None:
     """Aclaraciones sobre qué se predice."""
     st.markdown(
         f"Predice si la demanda eléctrica de **{MONTH_NAMES[month.month - 1]} de "
@@ -45,7 +46,7 @@ def _render_intro(month) -> None:
     )
 
 
-def _render_form(run_id: str, clean) -> None:
+def _render_form(run_id: str, clean: pd.DataFrame) -> None:
     """Formulario: mes fijo, temperatura esperada, rezagos y botón."""
     month = predict.next_month(clean)
     st.subheader("Datos de entrada")

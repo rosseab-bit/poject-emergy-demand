@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pandas as pd
 import pytest
+from support import isolated_logging, tiny_grids
 
 from src import config, data, db, features, pipeline, queries, results
 
@@ -28,8 +29,11 @@ def trained(tmp_path_factory: pytest.TempPathFactory) -> dict:
         "db_path": base / "structured.db",
         "unstructured_path": base / "unstructured.db",
     }
-    run_id = pipeline.run_etl(db_path=paths["db_path"], seed=7)
-    pipeline.run_training(run_id, models_dir=base / "models", model_names=LR, **paths)
+    with isolated_logging(), tiny_grids():
+        run_id = pipeline.run_etl(db_path=paths["db_path"], seed=7)
+        pipeline.run_training(
+            run_id, models_dir=base / "models", model_names=LR, **paths
+        )
     return {"run_id": run_id, **paths}
 
 
@@ -360,6 +364,7 @@ def test_noise_summary_without_results_is_none() -> None:
     assert queries.noise_summary(empty, []) is None
 
 
+@pytest.mark.slow  # corre un ETL, un entrenamiento y una predicción
 def test_prediction_step_follows_the_saved_predictions(tmp_path: Path) -> None:
     """El paso Predicción está pendiente hasta que se guarda una predicción.
 

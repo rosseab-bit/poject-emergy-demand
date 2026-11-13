@@ -1,34 +1,22 @@
 """Tests de la página Predicción (AppTest sobre una corrida real entrenada)."""
 
+from functools import partial
 from pathlib import Path
 
 import pandas as pd
 import pytest
 from streamlit.testing.v1 import AppTest
+from support import open_page as open_page_in
+from support import start_app
 
-from src import config, data, db, pipeline, predict, queries
+from src import data, db, pipeline, predict, queries
 
-APP_PATH = config.ROOT_DIR / "app.py"
-
-
-def open_page() -> AppTest:
-    """Abre la página Predicción."""
-    at = AppTest.from_file(str(APP_PATH), default_timeout=120).run()
-    return at.sidebar.radio[0].set_value("Predicción").run()
+open_page = partial(open_page_in, "Predicción")
 
 
 def predict_click(at: AppTest) -> AppTest:
     """Hace clic en «Predecir»."""
     return at.button[0].click().run()
-
-
-@pytest.fixture
-def tmp_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Bases y modelos temporales (sin corridas)."""
-    monkeypatch.setattr(config, "STRUCTURED_DB_PATH", tmp_path / "structured.db")
-    monkeypatch.setattr(config, "UNSTRUCTURED_DB_PATH", tmp_path / "unstructured.db")
-    monkeypatch.setattr(config, "MODELS_DIR", tmp_path / "models")
-    return tmp_path
 
 
 def test_prediction_without_runs_asks_to_train(tmp_config: Path) -> None:
@@ -40,7 +28,6 @@ def test_prediction_without_runs_asks_to_train(tmp_config: Path) -> None:
     assert len(at.button) == 0
 
 
-@pytest.mark.usefixtures("clean_root_logger")
 def test_prediction_with_untrained_run_asks_to_train(tmp_config: Path) -> None:
     """Una corrida con solo el ETL tampoco permite predecir."""
     pipeline.run_etl()
@@ -49,7 +36,6 @@ def test_prediction_with_untrained_run_asks_to_train(tmp_config: Path) -> None:
     assert len(at.button) == 0
 
 
-@pytest.mark.usefixtures("clean_root_logger")
 def test_prediction_requires_scenario_a(tmp_config: Path) -> None:
     """Si solo se entrenó el escenario B, avisa que falta el A."""
     run_id = pipeline.run_etl()
@@ -183,7 +169,7 @@ def test_viewing_the_page_adds_no_events_to_logs(use_trained: dict) -> None:
 
 def test_page_does_not_break_other_pages_without_data(tmp_config: Path) -> None:
     """Con bases vacías todas las páginas siguen abriendo."""
-    at = AppTest.from_file(str(APP_PATH), default_timeout=60).run()
+    at = start_app(60)
     for page in ("Predicción", "Reporte", "Datos"):
         at.sidebar.radio[0].set_value(page).run()
         assert not at.exception, page
@@ -199,3 +185,24 @@ def test_sidebar_marks_the_prediction_step_as_done(use_trained: dict) -> None:
     assert not at.exception
     assert "✅ Predicción — hecho" in "\n".join(m.value for m in at.sidebar.markdown)
     assert "⬜ Reporte — pendiente" in "\n".join(m.value for m in at.sidebar.markdown)
+
+
+def test_prediction_says_so_when_no_model_beats_the_reference(
+    use_trained: dict, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Si ningún modelo supera a «siempre alta», el resultado lo dice como error."""
+    real = queries.latest_prediction
+
+    def none_beats(run_id: str) -> dict | None:
+        doc = real(run_id)
+        if doc is not None:
+            for model in doc["modelos"].values():
+                model["supera_referencia"] = False
+        return doc
+
+    predict_click(open_page())  # asegura que haya una predicción guardada
+    monkeypatch.setattr(queries, "latest_prediction", none_beats)
+    at = open_page()
+    assert not at.exception
+    assert any("Ningún modelo superó en el hold-out" in e.value for e in at.error)
+    assert not any("únicamente superaron" in i.value for i in at.info)

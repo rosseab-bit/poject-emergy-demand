@@ -1,5 +1,6 @@
 """Página Datos: ejecutar el ETL y ver los datos limpios, el target y gráficos."""
 
+import pandas as pd
 import streamlit as st
 
 from app_pages import state
@@ -78,7 +79,7 @@ def _render_overview(overview: dict) -> None:
     st.caption(f"El primer mes con target es {target['first_month']}.")
 
 
-def _render_charts(clean) -> None:
+def _render_charts(clean: pd.DataFrame) -> None:
     """Serie de demanda, estacionalidad y temperatura contra demanda."""
     st.subheader("Gráficos")
     st.markdown("**Demanda total mensual**")

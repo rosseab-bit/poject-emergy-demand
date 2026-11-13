@@ -1,5 +1,6 @@
 """Tests de los gráficos del reporte (se revisa lo que dibujan, no solo el PNG)."""
 
+import dataclasses
 import itertools
 import struct
 import subprocess
@@ -238,3 +239,22 @@ def test_module_does_not_load_pyplot() -> None:
         timeout=60,
     )
     assert done.stdout.strip() == "False"
+
+
+def test_confusion_chart_leaves_empty_panels_when_scenarios_have_different_models(
+    trained_report_data,
+) -> None:
+    """Si un escenario tiene menos modelos que otro, sus paneles sobrantes quedan vacíos."""
+    base = trained_report_data
+    uneven = dataclasses.replace(
+        base,
+        docs=[
+            d
+            for d in base.docs
+            if (d["scenario"], d["model"]) != ("B", "random_forest")
+        ],
+    )
+    figure = report_charts.confusion_figure(uneven)
+    panels = [ax for ax in figure.axes if ax.axison]
+    assert len(figure.axes) == 4 and len(panels) == 3
+    assert sum(len(ax.texts) for ax in panels) == 12  # 4 conteos por panel

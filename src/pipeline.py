@@ -58,12 +58,16 @@ def _run_registered(
     db_path: Path | None,
     seed: int = config.SEED,
     run_id: str | None = None,
+    unstructured_path: Path | None = None,
+    with_unstructured: bool = False,
 ) -> str:
     """Ejecuta ``steps`` como una corrida registrada en ``runs`` y ``logs``.
 
     Crea el ``run_id`` (o continúa el que se pasa), lo deja activo para el
     logger y cierra la corrida con estado ``ok`` o ``error`` (relanzando el
-    error).
+    error). Al terminar vuelca el WAL de las bases al archivo principal, así los
+    ``.db`` quedan completos por sí solos; ``with_unstructured`` indica si la
+    corrida también escribió en ``unstructured.db``.
     """
     logger.setup_logging(db_path)
     db.init_structured_db(db_path)
@@ -79,6 +83,10 @@ def _run_registered(
         raise
     finally:
         logger.current_run_id.reset(token)
+        if with_unstructured:
+            db.checkpoint_all(db_path, unstructured_path)
+        else:
+            db.checkpoint(db_path)
     return run_id
 
 
@@ -148,7 +156,14 @@ def run_training(
         runs = run_training_steps(db_path, seed, scenarios, model_names, on_progress)
         run_saving_steps(run_id, runs, csv_path, unstructured_path, models_dir, seed)
 
-    return _run_registered(steps, db_path, seed, run_id=run_id)
+    return _run_registered(
+        steps,
+        db_path,
+        seed,
+        run_id=run_id,
+        unstructured_path=unstructured_path,
+        with_unstructured=True,
+    )
 
 
 def run_pipeline(
@@ -181,7 +196,13 @@ def run_pipeline(
         run_id = logger.current_run_id.get()
         run_saving_steps(run_id, runs, csv_path, unstructured_path, models_dir, seed)
 
-    return _run_registered(steps, db_path, seed)
+    return _run_registered(
+        steps,
+        db_path,
+        seed,
+        unstructured_path=unstructured_path,
+        with_unstructured=True,
+    )
 
 
 def main() -> None:
