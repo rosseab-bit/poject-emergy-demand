@@ -3,8 +3,9 @@
 from pathlib import Path
 
 import pytest
+from support import count_rows, main_file_only
 
-from src import config, data, db, pipeline, results, train
+from src import config, data, db, pipeline, queries, results, train
 
 # Integración: corre el ETL y el entrenamiento de verdad.
 pytestmark = pytest.mark.slow
@@ -179,6 +180,36 @@ def test_training_continues_the_etl_run(paths: dict) -> None:
             (run_id,),
         ).fetchone()[0]
     assert seed == 7
+
+
+@pytest.mark.usefixtures("small_grids")
+def test_a_finished_run_leaves_both_database_files_complete(
+    paths: dict, tmp_path: Path
+) -> None:
+    """Al terminar cada paso, copiar solo los .db (sin -wal) trae todo lo escrito."""
+    run_id = pipeline.run_etl(db_path=paths["db_path"], seed=7)
+    etl_copy = main_file_only(paths["db_path"], tmp_path / "tras_etl")
+    assert count_rows(etl_copy, "datos_limpios") == 308
+    assert count_rows(etl_copy, "logs") == len(
+        queries.get_logs(db_path=paths["db_path"])
+    )
+
+    pipeline.run_training(
+        run_id, scenarios=("A",), model_names=("logistic_regression",), **paths
+    )
+    structured = main_file_only(paths["db_path"], tmp_path / "tras_entrenar")
+    unstructured = main_file_only(
+        paths["unstructured_path"], tmp_path / "tras_entrenar"
+    )
+    assert count_rows(structured, "logs") == len(
+        queries.get_logs(db_path=paths["db_path"])
+    )
+    assert count_rows(structured, "runs") == 1
+    assert count_rows(unstructured, "resultados_modelos") == 1
+    assert count_rows(unstructured, "configuracion") == 1
+    for db_file in (paths["db_path"], paths["unstructured_path"]):
+        wal = Path(f"{db_file}-wal")
+        assert not wal.exists() or wal.stat().st_size == 0
 
 
 @pytest.mark.usefixtures("small_grids")

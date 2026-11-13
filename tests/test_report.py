@@ -3,11 +3,13 @@
 import dataclasses
 import json
 import re
+import sqlite3
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+from support import main_file_only
 
 from src import (
     config,
@@ -371,6 +373,25 @@ def test_save_report_logs_the_event_under_the_run(tmp_path: Path) -> None:
     assert "Reporte generado: reporte_r9.pdf (2 KB, predicciones omitidas)" in messages
     assert messages[-1].startswith("Fin: _generate_and_write")
     assert queries.get_logs(db_path=db_path)["run_id"].isna().sum() == 0
+
+
+def test_save_report_leaves_its_log_event_in_the_main_database_file(
+    tmp_path: Path,
+) -> None:
+    """El evento del reporte ya está en el .db principal (sin depender del -wal)."""
+    db_path = tmp_path / "structured.db"
+
+    def fake(run_id, include_predictions, **paths):
+        return b"%PDF-" + b"x" * 100
+
+    report.save_report("r5", True, tmp_path, fake, db_path=db_path)
+    copy = main_file_only(db_path, tmp_path / "copia")
+    conn = sqlite3.connect(copy)
+    try:
+        messages = [r[0] for r in conn.execute("SELECT message FROM logs")]
+    finally:
+        conn.close()
+    assert any(m.startswith("Reporte generado: reporte_r5.pdf") for m in messages)
 
 
 def test_failed_report_is_logged_as_error_and_leaves_no_file(tmp_path: Path) -> None:

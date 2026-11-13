@@ -179,6 +179,7 @@ def save_report(
         )
     finally:
         logger.current_run_id.reset(token)
+        db.checkpoint(db_path)
 
 
 def report_exists(run_id: str, reports_dir: Path | None = None) -> bool:

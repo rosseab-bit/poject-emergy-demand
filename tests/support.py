@@ -6,8 +6,11 @@ búsqueda, las ayudas para manejar la app con ``AppTest`` y el dataset real.
 """
 
 import logging
+import shutil
+import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
+from pathlib import Path
 
 import pandas as pd
 import pytest
@@ -77,3 +80,24 @@ def open_page(page: str, timeout: int = 120) -> AppTest:
 def sidebar_text(at: AppTest) -> str:
     """Todo el texto markdown de la barra lateral, en un solo string."""
     return "\n".join(m.value for m in at.sidebar.markdown)
+
+
+def main_file_only(db_path: Path, dest_dir: Path) -> Path:
+    """Copia solo el archivo ``.db`` principal (sin su ``-wal``) a otra carpeta.
+
+    Es lo que se entrega o se copia para revisar una base: si el volcado del WAL
+    no se hizo, a la copia le faltan los datos recientes.
+    """
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    return Path(shutil.copy(db_path, dest_dir / db_path.name))
+
+
+def count_rows(path: Path, table: str) -> int | None:
+    """Filas de una tabla en un archivo ``.db``; ``None`` si la tabla no existe."""
+    conn = sqlite3.connect(path)
+    try:
+        return conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+    except sqlite3.OperationalError:
+        return None
+    finally:
+        conn.close()
