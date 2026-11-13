@@ -1,0 +1,15 @@
+# Configuración de ruff del proyecto (versión fijada en requirements.txt).
+# Se agregan a las reglas por defecto: docstrings (D1), anotaciones de tipos (ANN)
+# y complejidad ciclomática (C901), que CLAUDE.md pide como convención.
+line-length = 88
+target-version = "py312"
+
+[lint]
+extend-select = ["D1", "ANN", "C901"]
+
+[lint.mccabe]
+max-complexity = 10
+
+[lint.per-file-ignores]
+# En los tests no se exigen anotaciones (fixtures y funciones auxiliares chicas).
+"tests/*" = ["ANN"]

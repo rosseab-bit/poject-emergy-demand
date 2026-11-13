@@ -21,7 +21,9 @@ RUN_COLUMNS = ["run_id", "started_at", "finished_at", "status", "seed", "notes"]
 LOG_COLUMNS = ["id", "ts", "level", "module", "message", "run_id"]
 
 
-def _read(query: str, params: tuple, path: Path | None, columns: list[str]):
+def _read(
+    query: str, params: tuple, path: Path | None, columns: list[str]
+) -> pd.DataFrame:
     """Ejecuta una consulta sobre ``structured.db`` y devuelve un DataFrame."""
     db.init_structured_db(path)
     with db.get_connection(path) as conn:

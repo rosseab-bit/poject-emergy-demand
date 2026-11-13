@@ -11,6 +11,8 @@ import io
 
 import numpy as np
 import pandas as pd
+from matplotlib.axes import Axes
+from matplotlib.axis import Axis
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
@@ -51,7 +53,7 @@ def figure_to_png(figure: Figure, dpi: int = DPI) -> bytes:
     return buffer.getvalue()
 
 
-def _style_axes(ax) -> None:
+def _style_axes(ax: Axes) -> None:
     """Estilo común: sin marco, grilla fina, tinta secundaria."""
     ax.set_facecolor(SURFACE)
     for side in ("top", "right"):
@@ -68,7 +70,7 @@ def _decimal(value: float, digits: int = 2) -> str:
     return f"{value:.{digits}f}".replace(".", ",").replace("-", "\u2212")
 
 
-def _comma_axis(axis, digits: int) -> None:
+def _comma_axis(axis: Axis, digits: int) -> None:
     """Hace que los números del eje usen coma decimal."""
     axis.set_major_formatter(FuncFormatter(lambda v, _pos: _decimal(v, digits)))
 

@@ -123,12 +123,15 @@ class FixedEstimator:
     """Estimador falso que devuelve predicciones fijas."""
 
     def __init__(self, pred: list[int]) -> None:
+        """Guarda las predicciones que devolverá (0 o 1 por fila)."""
         self.pred = np.array(pred)
 
     def predict(self, x: pd.DataFrame) -> np.ndarray:
+        """Devuelve las clases fijas, sin mirar los datos."""
         return self.pred
 
     def predict_proba(self, x: pd.DataFrame) -> np.ndarray:
+        """Devuelve probabilidades coherentes con las clases fijas."""
         return np.column_stack([1 - self.pred * 0.9, self.pred * 0.9])
 
 

@@ -18,6 +18,7 @@ from reportlab.lib.enums import TA_LEFT
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import cm
+from reportlab.pdfgen.canvas import Canvas
 from reportlab.platypus import (
     Image,
     KeepTogether,
@@ -737,7 +738,7 @@ def build_pdf(
         pageCompression=page_compression,
     )
 
-    def footer(canvas, document) -> None:
+    def footer(canvas: Canvas, document: SimpleDocTemplate) -> None:
         canvas.saveState()
         canvas.setFont("Helvetica", 8)
         canvas.setFillColor(INK_SECONDARY)
