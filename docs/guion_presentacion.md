@@ -70,16 +70,3 @@ Total: 9 minutos, con 1 de margen. Si te pasás, recortá la demo (diapositiva 7
    Resultado esperado (corrida `6cc7dbd4`): `run_training_steps` 19298 ms, `train_all` 19277 ms, `train_model` 8496 ms y `search_hyperparameters` 8436 ms. Los pasos se anidan (el entrenamiento contiene a sus pasos internos), por eso los tiempos se superponen. Si repetís la consulta sobre otra corrida, los valores serán otros. Cada predicción o reporte nuevo sobre esa corrida suma eventos, pero no cambia estos cuatro pasos.
 6. Alternativa desde Python, sin Atlas: `from src import mongo`, y la consulta equivalente con `mongo.get_database()["logs"].aggregate([...])` (hay ejemplos en el README).
 
-## Preguntas probables
-
-- **¿Por qué F1 y no accuracy?** Porque el 75 % de los meses son normales: decir «normal» siempre daría 75 % de accuracy sin aprender nada.
-- **¿Por qué no se declara un ganador?** Con 12 positivos en el hold-out, la diferencia entre modelos es menor que el desvío de la validación cruzada: sería ruido.
-- **¿Por qué ningún modelo supera a «siempre alta»?** Con pocos datos y un target relativo, la señal del clima y los rezagos no alcanza. Lo digo en el reporte en vez de esconderlo.
-- **¿Para qué sirve el escenario B si no anticipa?** Para cuantificar cuánto aporta la potencia máxima; es un diagnóstico, no una herramienta de predicción.
-- **¿Por qué un hold-out de 48 meses?** Con 36 el hold-out tenía 7 positivos; con 48, 12.
-- **¿Hay fuga de información?** El target y los rezagos usan solo el pasado (hay un test), y imputación y escalado se ajustan dentro del Pipeline solo con entrenamiento.
-- **¿De dónde salen los datos?** De fuentes públicas del gobierno de Argentina; el portal exacto y la fecha no quedaron registrados.
-- **¿Se puede reproducir?** Cada corrida guarda semilla, hash del dataset, versiones y commit. En un clon limpio, las métricas salieron idénticas.
-- **¿Por qué SQLite y MongoDB?** Los datasets, con columnas fijas, van a SQLite. Los logs, las corridas y los resultados son documentos con forma variable (cada modelo con sus parámetros, cada evento con o sin paso) y van a MongoDB. El `run_id` los une.
-- **¿Qué pasa si no hay internet o falla MongoDB?** La app y el pipeline no arrancan y lo dicen con un mensaje claro, sin mostrar la clave. Es una dependencia que asumo y declaro en los límites.
-- **¿Por qué los logs se mandan por lote?** Cada operación contra Atlas cuesta unos 30 ms; mandar los eventos de a uno sumaría varios segundos por corrida. Los errores salen al instante y, si el proceso muere de golpe, se pueden perder los eventos del paso en curso: es un compromiso que acepté.
