@@ -28,7 +28,7 @@ Total: 9 minutos, con 1 de margen. Si te pasás, recortá la demo (diapositiva 7
 ## Guion
 
 **1. Portada (0:30).**
-«Somos MatIAndo y presento un trabajo individual para Programación Avanzada en Ciencia de Datos. La pregunta: dado un mes, ¿su demanda eléctrica va a ser alta *para su época del año*? Les adelanto algo: el método quedó sólido, pero con tan pocos datos el resultado es modesto, y lo voy a mostrar tal cual.»
+«Somos MatIAndo y presento un trabajo grupal para Programación Avanzada en Ciencia de Datos. La pregunta: dado un mes, ¿su demanda eléctrica va a ser alta *para su época del año*? Les adelanto algo: el método quedó sólido, pero con tan pocos datos el resultado es modesto, y lo voy a mostrar tal cual.»
 
 **2. El problema (1:00).**
 «Es un clasificador binario a nivel mensual, no diario ni horario. El flujo completo: un CSV público, un ETL que deja los datasets limpios en SQLite, el cálculo de variables y target, tres modelos, y todo lo que registra cada corrida —logs, resultados y predicciones— en MongoDB, con la interfaz de Streamlit y un reporte PDF. Todo el código está en `src/` y corre igual desde la interfaz o con `python -m src.pipeline`.»
